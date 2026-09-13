@@ -11,21 +11,12 @@ struct CostUsageClaudeFileStamp: Equatable, Sendable, Codable {
     }
 
     static func read(at url: URL) -> Self? {
-        var info = stat()
-        guard url.path.withCString({ fstatat(AT_FDCWD, $0, &info, 0) }) == 0 else { return nil }
-        guard info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else { return nil }
-        #if os(Linux)
-        let modifiedSeconds = Int64(info.st_mtim.tv_sec)
-        let modifiedNanoseconds = Int64(info.st_mtim.tv_nsec)
-        #else
-        let modifiedSeconds = Int64(info.st_mtimespec.tv_sec)
-        let modifiedNanoseconds = Int64(info.st_mtimespec.tv_nsec)
-        #endif
+        guard let info = UsageFileMetadata.read(at: url), info.isRegularFile else { return nil }
         return Self(
-            fileID: "\(info.st_dev):\(info.st_ino)",
-            size: Int64(info.st_size),
-            modifiedSeconds: modifiedSeconds,
-            modifiedNanoseconds: modifiedNanoseconds)
+            fileID: info.fileID,
+            size: info.size,
+            modifiedSeconds: info.modifiedSeconds,
+            modifiedNanoseconds: info.modifiedNanoseconds)
     }
 }
 

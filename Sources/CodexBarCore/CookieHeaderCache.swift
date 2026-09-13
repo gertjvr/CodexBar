@@ -868,20 +868,7 @@ public enum CookieHeaderCache {
             try FileManager.default.createDirectory(
                 at: lockURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true)
-            let fd = open(lockURL.path, O_CREAT | O_RDWR | O_CLOEXEC, S_IRUSR | S_IWUSR)
-            guard fd >= 0 else {
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-            }
-            defer {
-                _ = flock(fd, LOCK_UN)
-                close(fd)
-            }
-            while flock(fd, LOCK_EX) != 0 {
-                guard errno == EINTR else {
-                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-                }
-            }
-            return try operation()
+            return try InterprocessFileLock.withLock(at: lockURL, operation: operation)
         }
     }
 

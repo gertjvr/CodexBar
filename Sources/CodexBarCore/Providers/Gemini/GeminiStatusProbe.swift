@@ -1416,6 +1416,23 @@ extension GeminiStatusProbe {
         environment: [String: String],
         timeout: TimeInterval) -> String?
     {
+        #if os(Windows)
+        var mergedEnvironment = environment
+        mergedEnvironment["PATH"] = PathBuilder.effectivePATH(
+            purposes: [.tty, .nodeTooling],
+            env: environment,
+            loginPATH: LoginShellPathCache.shared.current)
+        guard let result = try? WindowsSubprocessRunner.runSynchronously(
+            binary: executable,
+            arguments: arguments,
+            environment: mergedEnvironment,
+            timeout: timeout)
+        else { return nil }
+        let text = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        return text.components(separatedBy: .newlines).first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #else
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -1484,6 +1501,7 @@ extension GeminiStatusProbe {
 
         return output.components(separatedBy: .newlines).first?
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        #endif
     }
 }
 

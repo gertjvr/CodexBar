@@ -1,4 +1,7 @@
 import Foundation
+#if os(Windows)
+import ucrt
+#endif
 
 enum KeychainTestSafety {
     static let suppressAccessEnvironmentKey = "CODEXBAR_SUPPRESS_TEST_KEYCHAIN_ACCESS"
@@ -17,7 +20,11 @@ enum KeychainTestSafety {
         defer { self.blockedProcessSideEffectsLock.unlock() }
         guard !self.didApplyBlockedProcessSideEffects else { return }
         self.didApplyBlockedProcessSideEffects = true
+        #if os(Windows)
+        _ = _putenv_s(self.suppressAccessEnvironmentKey, "1")
+        #else
         setenv(self.suppressAccessEnvironmentKey, "1", 1)
+        #endif
         #if os(macOS)
         KeychainLegacyInteraction.disableProcessWideInteraction()
         #endif

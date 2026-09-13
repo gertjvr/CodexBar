@@ -7,7 +7,7 @@ public protocol ProviderHTTPTransport: Sendable {
     func data(for request: URLRequest) async throws -> (Data, URLResponse)
 }
 
-#if !os(Linux)
+#if canImport(Darwin)
 extension URLSession: ProviderHTTPTransport {}
 #endif
 
@@ -178,7 +178,7 @@ public final class ProviderHTTPClient: ProviderHTTPTransport, @unchecked Sendabl
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 30
         configuration.timeoutIntervalForResource = 90
-        #if !os(Linux)
+        #if canImport(Darwin)
         configuration.waitsForConnectivity = false
         #endif
         return configuration

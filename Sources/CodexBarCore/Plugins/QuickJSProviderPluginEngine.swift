@@ -1,4 +1,8 @@
+#if os(Linux)
+// Corelibs Foundation needs this module loaded to deserialize Thread's stored-property types.
+// https://github.com/swiftlang/swift-corelibs-foundation/issues/5108
 import CoreFoundation
+#endif
 import CQuickJS
 import Foundation
 #if canImport(FoundationNetworking)
@@ -768,7 +772,7 @@ final class QuickJSProviderPluginEngine: ProviderPluginEngine, @unchecked Sendab
 
     private static func timeoutSeconds(_ options: [String: Any]) throws -> TimeInterval {
         guard let value = options["timeoutSeconds"] else { return 15 }
-        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else {
+        guard let number = value as? NSNumber, !JSONNumber.isBoolean(number) else {
             throw ProviderPluginError.http("timeoutSeconds must be a number from 1 through 30")
         }
         let seconds = number.doubleValue

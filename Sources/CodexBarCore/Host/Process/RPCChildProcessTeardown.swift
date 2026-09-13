@@ -35,6 +35,12 @@ package final class RPCChildProcessInput: @unchecked Sendable {
 }
 
 package enum RPCChildProcessTeardown {
+    package static func terminate(process: RPCChildProcess, stdin: RPCChildProcessInput) {
+        stdin.close()
+        process.stop()
+    }
+
+    #if !os(Windows)
     /// Tears down a JSON-RPC child spawned via Foundation `Process`.
     ///
     /// Closes the child's stdin first (codex app-server and grok agent stdio exit on EOF),
@@ -45,4 +51,5 @@ package enum RPCChildProcessTeardown {
         stdin.close()
         SubprocessRunner.terminateProcess(process, processGroup: nil)
     }
+    #endif
 }

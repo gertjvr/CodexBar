@@ -1,4 +1,3 @@
-import CoreFoundation
 import Foundation
 
 enum AlibabaTokenPlanCLIUsageError: LocalizedError, Sendable, Equatable {
@@ -50,7 +49,7 @@ enum AlibabaTokenPlanCLIUsageParser {
 
     private static func ratio(_ value: Any?) -> Double? {
         guard let number = value as? NSNumber,
-              CFGetTypeID(number) != CFBooleanGetTypeID()
+              !JSONNumber.isBoolean(number)
         else { return nil }
         let ratio = number.doubleValue
         return ratio.isFinite && (0...1).contains(ratio) ? ratio : nil
@@ -58,7 +57,7 @@ enum AlibabaTokenPlanCLIUsageParser {
 
     private static func resetDate(_ value: Any?) -> Date? {
         guard let number = value as? NSNumber,
-              CFGetTypeID(number) != CFBooleanGetTypeID()
+              !JSONNumber.isBoolean(number)
         else { return nil }
         let milliseconds = number.doubleValue
         guard milliseconds.isFinite, milliseconds > 0 else { return nil }

@@ -472,31 +472,17 @@ enum ModelsDevCache {
         }
     }
 
-    /// Cheap POSIX stat for the (mtime, size) memo key. `attributesOfItem` also reads xattrs.
-    /// `stat(2)` follows a terminal symlink (matching what `Data(contentsOf:)` later reads) whereas
-    /// `attributesOfItem` did not.
+    /// Cheap native metadata for the (mtime, size) memo key, without extra xattr reads.
+    /// Follows a terminal symlink, matching what `Data(contentsOf:)` later reads.
     private static func fileMetadata(at url: URL) -> (modificationDate: Date?, size: Int?) {
         self.metadataReadRecorder?.record()
 
-        return url.withUnsafeFileSystemRepresentation { pointer in
-            guard let pointer else { return (nil, nil) }
-            var status = stat()
-            guard stat(pointer, &status) == 0 else {
-                return (nil, nil)
-            }
-            return (Self.modificationDate(from: status), Int(status.st_size))
+        guard let metadata = UsageFileMetadata.read(at: url), let size = Int(exactly: metadata.size) else {
+            return (nil, nil)
         }
-    }
-
-    private static func modificationDate(from status: stat) -> Date {
-        #if canImport(Darwin)
-        let seconds = TimeInterval(status.st_mtimespec.tv_sec)
-        let nanoseconds = TimeInterval(status.st_mtimespec.tv_nsec)
-        #else
-        let seconds = TimeInterval(status.st_mtim.tv_sec)
-        let nanoseconds = TimeInterval(status.st_mtim.tv_nsec)
-        #endif
-        return Date(timeIntervalSince1970: seconds + nanoseconds / 1_000_000_000)
+        let seconds = TimeInterval(metadata.modifiedSeconds)
+        let nanoseconds = TimeInterval(metadata.modifiedNanoseconds)
+        return (Date(timeIntervalSince1970: seconds + nanoseconds / 1_000_000_000), size)
     }
 
     private static func defaultCacheRoot() -> URL {
