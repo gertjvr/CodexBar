@@ -148,7 +148,7 @@ passed in run `34688694539`; installed-provider runtime compatibility still need
 
 The compatibility target is the existing `CodexBarCLI` commands, configuration, and JSON output,
 with shared provider logic. A Windows tray UI can consume this CLI without maintaining its own
-provider implementation. The Windows tray is maintained separately in the gertjvr/CodexBar fork.
+provider implementation. The tray's implementation status is tracked in [windows-tray.md](windows-tray.md).
 Packaging checks run only once the complete CLI builds successfully. They validate version/help and
 resources with a minimal PATH, synthetic config validation and redaction, JSON argument errors, and
 dashboard stdout/file output with every provider disabled. No provider request is made by these checks.

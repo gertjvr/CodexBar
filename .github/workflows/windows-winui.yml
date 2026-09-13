@@ -1,0 +1,29 @@
+name: Windows WinUI tray
+on:
+  push:
+    branches: [windows-cli-actions]
+    paths: ["Windows/**", "Scripts/windows-winui-dev.ps1", ".github/workflows/windows-winui.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-winui-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Test the existing CLI projection offline
+        run: dotnet run --project Windows/CodexBar.Tray.Tests
+      - name: Build the self-contained WinUI renderer
+        run: ./Scripts/windows-winui-dev.ps1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codexbar-winui-preview-x64
+          path: .build/windows-winui
+          if-no-files-found: error
