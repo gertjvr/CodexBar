@@ -168,7 +168,7 @@ extension CodexBarCLI {
             providerRuntime: appAutoVerifier ? .app : .cli)
 
         for p in providerList {
-            let status = includeStatus ? await Self.fetchStatus(for: p) : nil
+            let status = includeStatus ? await Self.fetchStatus(for: p, includeComponents: true) : nil
             if appAutoVerifier {
                 // Background app Auto intentionally launches the opaque Claude owner CLI only after a successful
                 // user-initiated fetch has established this process's account-scoped availability marker. Recreate

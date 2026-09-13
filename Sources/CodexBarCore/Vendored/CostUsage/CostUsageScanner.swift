@@ -2546,23 +2546,13 @@ enum CostUsageScanner {
         }
     }
 
-    #if os(Linux)
-    private typealias CodexDirectoryHandle = OpaquePointer
-    #else
-    private typealias CodexDirectoryHandle = UnsafeMutablePointer<DIR>
-    #endif
-
     private final class CodexDirectoryCursor: @unchecked Sendable {
-        let directory: CodexDirectoryHandle
+        let directory: UsageDirectoryCursor
         var logicalOffset: Int64
 
-        init(directory: CodexDirectoryHandle, logicalOffset: Int64 = 0) {
+        init(directory: UsageDirectoryCursor, logicalOffset: Int64 = 0) {
             self.directory = directory
             self.logicalOffset = logicalOffset
-        }
-
-        deinit {
-            closedir(self.directory)
         }
     }
 
@@ -2586,7 +2576,7 @@ enum CostUsageScanner {
                 self.cursors.removeValue(forKey: path)
             }
             if self.cursors[path] == nil {
-                guard let directory = opendir(path) else {
+                guard let directory = UsageDirectoryCursor(directoryURL: directoryURL) else {
                     return CodexDirectoryPage(files: [], nextOffset: nil, visits: 0)
                 }
                 self.cursors[path] = CodexDirectoryCursor(directory: directory)
@@ -2598,12 +2588,9 @@ enum CostUsageScanner {
             var files: [URL] = []
             var visits = 0
             while visits < visitLimit {
-                guard let entry = readdir(cursor.directory) else {
+                guard let name = cursor.directory.nextName() else {
                     self.cursors.removeValue(forKey: path)
                     return CodexDirectoryPage(files: files, nextOffset: nil, visits: visits)
-                }
-                let name = withUnsafePointer(to: entry.pointee.d_name) { pointer in
-                    pointer.withMemoryRebound(to: CChar.self, capacity: 1024) { String(cString: $0) }
                 }
                 guard name != ".", name != ".." else { continue }
                 cursor.logicalOffset += 1

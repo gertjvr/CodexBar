@@ -1,4 +1,3 @@
-import CoreFoundation
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
@@ -568,7 +567,7 @@ enum MiMoFirefoxSessionCookieImporter {
 
     private static func isZero(_ value: Any) -> Bool {
         guard let number = value as? NSNumber,
-              CFGetTypeID(number) != CFBooleanGetTypeID(),
+              !JSONNumber.isBoolean(number),
               !["f", "d"].contains(String(cString: number.objCType))
         else { return false }
         return number.int64Value == 0
@@ -576,7 +575,7 @@ enum MiMoFirefoxSessionCookieImporter {
 
     private static func isBoolean(_ value: Any, equalTo expected: Bool) -> Bool {
         guard let number = value as? NSNumber,
-              CFGetTypeID(number) == CFBooleanGetTypeID()
+              JSONNumber.isBoolean(number)
         else { return false }
         return number.boolValue == expected
     }

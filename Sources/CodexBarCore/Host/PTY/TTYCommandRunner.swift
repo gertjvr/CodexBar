@@ -7,6 +7,7 @@ import Musl
 #endif
 import Foundation
 
+#if !os(Windows)
 private enum TTYCommandRunnerActiveProcessRegistry {
     private struct ProcessInfo {
         let binary: String
@@ -264,6 +265,8 @@ enum TTYProcessTreeTerminator {
     }
 }
 
+#endif
+
 private enum TTYCommandRunnerTestingOverrides {
     @TaskLocal static var postDeadlineDrainDuration: TimeInterval?
     @TaskLocal static var outputLimitBytes: Int?
@@ -281,98 +284,16 @@ public struct TTYCommandRunner {
     private static let log = CodexBarLog.logger(LogCategories.ttyRunner)
     private static let postExitDrainTimeout: TimeInterval = 1
 
-    public struct Result: Sendable {
-        public enum Completion: Sendable, Equatable {
-            case processExited(status: Int32)
-            case idleTimeout
-            case outputCondition
-            case deadlineExceeded
-        }
-
-        public let text: String
-        public let completion: Completion
-    }
-
-    public struct Options: Sendable {
-        public var rows: UInt16 = 50
-        public var cols: UInt16 = 160
-        public var timeout: TimeInterval = 20.0
-        /// Stop early once output has been idle for this long (only for non-Codex flows).
-        /// Useful for interactive TUIs that render once and then wait for input indefinitely.
-        public var idleTimeout: TimeInterval?
-        public var workingDirectory: URL?
-        public var extraArgs: [String] = []
-        public var baseEnvironment: [String: String]?
-        public var initialDelay: TimeInterval = 0.4
-        public var sendEnterEvery: TimeInterval?
-        public var sendOnSubstrings: [String: String]
-        public var stopOnURL: Bool
-        public var stopOnSubstrings: [String]
-        public var settleAfterStop: TimeInterval
-        public var forceCodexStatusMode: Bool
-        public var useProviderProbeWorkingDirectory: Bool
-        public var returnOnEmptyProcessExit: Bool
-        public var cancellationCheck: @Sendable () -> Bool
-
-        public init(
-            rows: UInt16 = 50,
-            cols: UInt16 = 160,
-            timeout: TimeInterval = 20.0,
-            idleTimeout: TimeInterval? = nil,
-            workingDirectory: URL? = nil,
-            extraArgs: [String] = [],
-            baseEnvironment: [String: String]? = nil,
-            initialDelay: TimeInterval = 0.4,
-            sendEnterEvery: TimeInterval? = nil,
-            sendOnSubstrings: [String: String] = [:],
-            stopOnURL: Bool = false,
-            stopOnSubstrings: [String] = [],
-            settleAfterStop: TimeInterval = 0.25,
-            forceCodexStatusMode: Bool = false,
-            useProviderProbeWorkingDirectory: Bool = false,
-            returnOnEmptyProcessExit: Bool = false,
-            cancellationCheck: @escaping @Sendable () -> Bool = { Task<Never, Never>.isCancelled })
-        {
-            self.rows = rows
-            self.cols = cols
-            self.timeout = timeout
-            self.idleTimeout = idleTimeout
-            self.workingDirectory = workingDirectory
-            self.extraArgs = extraArgs
-            self.baseEnvironment = baseEnvironment
-            self.initialDelay = initialDelay
-            self.sendEnterEvery = sendEnterEvery
-            self.sendOnSubstrings = sendOnSubstrings
-            self.stopOnURL = stopOnURL
-            self.stopOnSubstrings = stopOnSubstrings
-            self.settleAfterStop = settleAfterStop
-            self.forceCodexStatusMode = forceCodexStatusMode
-            self.useProviderProbeWorkingDirectory = useProviderProbeWorkingDirectory
-            self.returnOnEmptyProcessExit = returnOnEmptyProcessExit
-            self.cancellationCheck = cancellationCheck
-        }
-    }
-
-    public enum Error: Swift.Error, LocalizedError, Sendable {
-        case binaryNotFound(String)
-        case launchFailed(String)
-        case timedOut
-        case outputTooLarge
-
-        public var errorDescription: String? {
-            switch self {
-            case let .binaryNotFound(bin):
-                "Missing CLI '\(bin)'. Install it (e.g. npm i -g @openai/codex) or add it to PATH."
-            case let .launchFailed(msg): "Failed to launch process: \(msg)"
-            case .timedOut: "PTY command timed out."
-            case .outputTooLarge: "PTY command produced more output than CodexBar can safely process."
-            }
-        }
-    }
-
     public init() {}
 
+    private static func sleepMicroseconds(_ duration: UInt32) {
+        Thread.sleep(forTimeInterval: Double(duration) / 1_000_000)
+    }
+
     public static func terminateActiveProcessesForAppShutdown() {
+        #if os(Windows)
+        WindowsManagedProcess.terminateActiveProcessesForAppShutdown()
+        #else
         let targets = TTYCommandRunnerActiveProcessRegistry.drainForShutdown()
         guard !targets.isEmpty else { return }
 
@@ -394,8 +315,10 @@ public struct TTYCommandRunner {
                 processGroup: target.processGroup,
                 signal: SIGKILL)
         }
+        #endif
     }
 
+    #if !os(Windows)
     private static func resolveShutdownTargets(
         _ targets: [(pid: pid_t, binary: String, processGroup: pid_t?)],
         hostProcessGroup: pid_t,
@@ -420,6 +343,8 @@ public struct TTYCommandRunner {
         return resolvedTargets
     }
 
+    #endif
+
     typealias DrainReadResult = TTYCommandRunnerDrainReadResult
 
     @discardableResult
@@ -428,7 +353,7 @@ public struct TTYCommandRunner {
         readChunk: () -> DrainReadResult,
         processChunk: (Data) -> Void,
         shouldContinue: () -> Bool = { true },
-        sleep: (UInt32) -> Void = { usleep($0) })
+        sleep: (UInt32) -> Void = { Self.sleepMicroseconds($0) })
         -> Bool
     {
         while true {
@@ -511,7 +436,7 @@ public struct TTYCommandRunner {
             throw Error.binaryNotFound(binary)
         }
 
-        let binaryName = URL(fileURLWithPath: resolved).lastPathComponent
+        let binaryName = Self.executableName(resolved)
         Self.log.debug(
             "PTY start",
             metadata: [
@@ -522,6 +447,10 @@ public struct TTYCommandRunner {
                 "args": "\(options.extraArgs.count)",
             ])
 
+        #if os(Windows)
+        let console = try WindowsPseudoConsole(rows: options.rows, columns: options.cols)
+        defer { console.close() }
+        #else
         var primaryFD: Int32 = -1
         var secondaryFD: Int32 = -1
         var win = winsize(ws_row: options.rows, ws_col: options.cols, ws_xpixel: 0, ws_ypixel: 0)
@@ -535,6 +464,8 @@ public struct TTYCommandRunner {
         let primaryHandle = FileHandle(fileDescriptor: primaryFD, closeOnDealloc: true)
         let secondaryHandle = FileHandle(fileDescriptor: secondaryFD, closeOnDealloc: true)
 
+        #endif
+
         func checkCancellation() throws {
             if options.cancellationCheck() {
                 throw CancellationError()
@@ -542,6 +473,10 @@ public struct TTYCommandRunner {
         }
 
         func writeAllToPrimary(_ data: Data) throws {
+            #if os(Windows)
+            try checkCancellation()
+            try console.send(data)
+            #else
             try data.withUnsafeBytes { rawBytes in
                 guard let baseAddress = rawBytes.baseAddress else { return }
                 var offset = 0
@@ -564,12 +499,13 @@ public struct TTYCommandRunner {
                         if retries > 200 {
                             throw Error.launchFailed("write to PTY would block")
                         }
-                        usleep(5000)
+                        Self.sleepMicroseconds(5000)
                         continue
                     }
                     throw Error.launchFailed("write to PTY failed: \(String(cString: strerror(err)))")
                 }
             }
+            #endif
         }
 
         let baseEnv = options.baseEnvironment ?? ProcessInfo.processInfo.environment
@@ -594,6 +530,23 @@ public struct TTYCommandRunner {
             env["PWD"] = workingDirectory.path
         }
 
+        #if os(Windows)
+        try checkCancellation()
+        let process: WindowsManagedProcess
+        do {
+            process = try WindowsManagedProcess.launch(
+                binary: executable,
+                arguments: arguments,
+                environment: env,
+                workingDirectory: workingDirectory,
+                console: console)
+        } catch {
+            throw Error.launchFailed(error.localizedDescription)
+        }
+        defer { process.close() }
+        var didExceedOutputLimit = false
+        var terminalReadError: Swift.Error?
+        #else
         var cleanedUp = false
         var launchedProcess: SpawnedProcessGroup?
         var didExceedOutputLimit = false
@@ -675,6 +628,7 @@ public struct TTYCommandRunner {
         TTYCommandRunnerActiveProcessRegistry.updateProcessGroup(pid: pid, processGroup: process.processGroup)
         TTYCommandRunnerActiveProcessRegistry.endLaunch()
         launchReservationHeld = false
+        #endif
         Self.log.debug("PTY launched", metadata: ["binary": binaryName])
 
         func send(_ text: String) throws {
@@ -693,12 +647,40 @@ public struct TTYCommandRunner {
         var buffer = BoundedOutputBuffer(maxBytes: outputLimitBytes)
 
         func checkOutputLimit() throws {
+            #if os(Windows)
+            if let terminalReadError { throw Error.launchFailed(terminalReadError.localizedDescription) }
+            #endif
             if didExceedOutputLimit {
                 Self.log.warning("PTY output exceeded memory limit", metadata: ["binary": binaryName])
                 throw Error.outputTooLarge
             }
         }
 
+        #if os(Windows)
+        func readDrainChunk() -> DrainReadResult {
+            guard !didExceedOutputLimit, terminalReadError == nil else { return .closed }
+            do {
+                let result = try console.readAvailable()
+                guard buffer.append(result.data) else {
+                    didExceedOutputLimit = true
+                    return .closed
+                }
+                if !result.data.isEmpty { return .data(result.data) }
+                return result.ended ? .closed : .wouldBlock
+            } catch SubprocessRunnerError.outputTooLarge {
+                didExceedOutputLimit = true
+                return .closed
+            } catch {
+                terminalReadError = error
+                return .closed
+            }
+        }
+
+        func readChunk() -> Data {
+            if case let .data(data) = readDrainChunk() { return data }
+            return Data()
+        }
+        #else
         func readChunkResult() -> (data: Data, terminalRead: Int, errno: Int32) {
             var appended = Data()
             var terminalRead = 0
@@ -735,6 +717,8 @@ public struct TTYCommandRunner {
             return Self.drainReadResult(for: result.data, terminalRead: result.terminalRead, errno: result.errno)
         }
 
+        #endif
+
         func firstLink(in data: Data) -> String? {
             guard let s = String(data: data, encoding: .utf8) else { return nil }
             let pattern = #"https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+"#
@@ -754,7 +738,7 @@ public struct TTYCommandRunner {
 
         let cursorQuery = Data([0x1B, 0x5B, 0x36, 0x6E])
 
-        usleep(UInt32(options.initialDelay * 1_000_000))
+        Self.sleepMicroseconds(UInt32(options.initialDelay * 1_000_000))
         try checkCancellation()
 
         // Generic path for non-Codex (e.g. Claude /login)
@@ -878,7 +862,7 @@ public struct TTYCommandRunner {
                 if !process.isRunning {
                     break
                 }
-                usleep(60000)
+                Self.sleepMicroseconds(60000)
             }
 
             let exitedBeforeDeadline = !stoppedEarly
@@ -886,7 +870,9 @@ public struct TTYCommandRunner {
             let exitStatusBeforeDrain: Int32?
             if exitedBeforeDeadline {
                 exitStatusBeforeDrain = process.terminateSynchronously()
+                #if !os(Windows)
                 didTerminateSynchronously = true
+                #endif
             } else {
                 exitStatusBeforeDrain = nil
             }
@@ -919,7 +905,7 @@ public struct TTYCommandRunner {
                             try? send("\u{1b}[1;1R")
                             nextCursorCheckAt = Date().addingTimeInterval(1.0)
                         }
-                        usleep(50000)
+                        Self.sleepMicroseconds(50000)
                     }
                 }
             } else if exitedBeforeDeadline {
@@ -968,7 +954,7 @@ public struct TTYCommandRunner {
         if !delayInitialSend {
             try send(script)
             try send("\r")
-            usleep(150_000)
+            Self.sleepMicroseconds(150_000)
             try send("\r")
             try send("\u{1b}")
         }
@@ -1019,9 +1005,9 @@ public struct TTYCommandRunner {
                 // Users report one Down + Enter is enough; follow with an extra Enter for safety, then re-run
                 // /status.
                 try? send("\u{1b}[B") // highlight option 2 (Skip)
-                usleep(120_000)
+                Self.sleepMicroseconds(120_000)
                 try? send("\r")
-                usleep(150_000)
+                Self.sleepMicroseconds(150_000)
                 try? send("\r") // if still focused on prompt, confirm again
                 try? send("/status")
                 try? send("\r")
@@ -1035,7 +1021,7 @@ public struct TTYCommandRunner {
                     updateScanBuffer.reset()
                     sawCodexStatus = false
                 }
-                usleep(300_000)
+                Self.sleepMicroseconds(300_000)
             }
             if !sentScript, !sawCodexUpdatePrompt || skippedCodexUpdate {
                 try? send(script)
@@ -1043,7 +1029,7 @@ public struct TTYCommandRunner {
                 sentScript = true
                 scriptSentAt = Date()
                 lastEnter = Date()
-                usleep(200_000)
+                Self.sleepMicroseconds(200_000)
                 continue
             }
             if sentScript, !sawCodexStatus {
@@ -1051,7 +1037,7 @@ public struct TTYCommandRunner {
                     try? send("\r")
                     enterRetries += 1
                     lastEnter = Date()
-                    usleep(120_000)
+                    Self.sleepMicroseconds(120_000)
                     continue
                 }
                 if let sentAt = scriptSentAt,
@@ -1067,14 +1053,14 @@ public struct TTYCommandRunner {
                     sawCodexStatus = false
                     scriptSentAt = Date()
                     lastEnter = Date()
-                    usleep(220_000)
+                    Self.sleepMicroseconds(220_000)
                     continue
                 }
             }
             if sawCodexStatus {
                 break
             }
-            usleep(120_000)
+            Self.sleepMicroseconds(120_000)
         }
 
         if sawCodexStatus {
@@ -1091,7 +1077,7 @@ public struct TTYCommandRunner {
                     try? send("\u{1b}[1;1R")
                     nextCursorCheckAt = Date().addingTimeInterval(1.0)
                 }
-                usleep(100_000)
+                Self.sleepMicroseconds(100_000)
             }
         }
 
@@ -1114,6 +1100,7 @@ public struct TTYCommandRunner {
 }
 
 extension TTYCommandRunner {
+    #if !os(Windows)
     static func drainReadResult(for data: Data, terminalRead: Int, errno err: Int32) -> DrainReadResult {
         if !data.isEmpty {
             return .data(data)
@@ -1138,6 +1125,8 @@ extension TTYCommandRunner {
     static func withIsolatedActiveProcessRegistryForTesting<T>(_ operation: () throws -> T) rethrows -> T {
         try TTYCommandRunnerActiveProcessRegistry.withIsolatedStateForTesting(operation)
     }
+
+    #endif
 
     static func withPostDeadlineDrainDurationOverrideForTesting<T>(
         _ duration: TimeInterval,
@@ -1168,8 +1157,8 @@ extension TTYCommandRunner {
         resolved: String,
         environment: [String: String]) -> ProviderTTYLaunchConfig?
     {
-        let requestedName = URL(fileURLWithPath: requested).lastPathComponent
-        let resolvedName = URL(fileURLWithPath: resolved).lastPathComponent
+        let requestedName = self.executableName(requested)
+        let resolvedName = self.executableName(resolved)
         return ProviderDescriptorRegistry.all.lazy.compactMap { descriptor -> ProviderTTYLaunchConfig? in
             let cli = descriptor.cli
             guard let ttyLaunch = cli.ttyLaunch else { return nil }
@@ -1188,8 +1177,21 @@ extension TTYCommandRunner {
         }.first
     }
 
+    private static func executableName(_ path: String) -> String {
+        let url = URL(fileURLWithPath: path)
+        #if os(Windows)
+        if ["exe", "com", "cmd", "bat"].contains(url.pathExtension.lowercased()) {
+            return url.deletingPathExtension().lastPathComponent.lowercased()
+        }
+        #endif
+        return url.lastPathComponent
+    }
+
     private static func normalizedExecutablePath(_ path: String) -> String {
         let expanded = NSString(string: path).expandingTildeInPath
+        #if os(Windows)
+        return URL(fileURLWithPath: expanded).standardizedFileURL.resolvingSymlinksInPath().path.lowercased()
+        #else
         var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
         if realpath(expanded, &buffer) != nil {
             return buffer.withUnsafeBufferPointer { rawBuffer in
@@ -1198,9 +1200,17 @@ extension TTYCommandRunner {
             }
         }
         return URL(fileURLWithPath: expanded).standardizedFileURL.path
+        #endif
     }
 
     private static func runWhich(_ tool: String) -> String? {
+        #if os(Windows)
+        let environment = ProcessInfo.processInfo.environment
+        return WindowsEnvironment.findExecutable(
+            tool,
+            paths: WindowsEnvironment.pathEntries(self.enrichedPath()),
+            environment: environment)
+        #else
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/which")
         proc.arguments = [tool]
@@ -1221,6 +1231,7 @@ extension TTYCommandRunner {
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !path.isEmpty else { return nil }
         return path
+        #endif
     }
 
     /// Uses login-shell PATH when available so TTY probes match the user's shell configuration.
@@ -1235,10 +1246,14 @@ extension TTYCommandRunner {
         loginPATH: [String]? = LoginShellPathCache.shared.current,
         home: String = NSHomeDirectory()) -> [String: String]
     {
+        #if os(Windows)
+        var env = WindowsEnvironment.canonicalized(baseEnv)
+        #else
         var env = baseEnv
+        #endif
         env["PATH"] = PathBuilder.effectivePATH(
             purposes: [.tty, .nodeTooling],
-            env: baseEnv,
+            env: env,
             loginPATH: loginPATH,
             home: home)
         if env["HOME"]?.isEmpty ?? true {
@@ -1260,6 +1275,7 @@ extension TTYCommandRunner {
     }
 }
 
+#if !os(Windows)
 extension TTYCommandRunner {
     @discardableResult
     static func registerActiveProcessForAppShutdown(pid: pid_t, binary: String) -> Bool {
@@ -1332,3 +1348,5 @@ extension TTYCommandRunner {
         self.resolveShutdownTargets(targets, hostProcessGroup: hostProcessGroup, groupResolver: groupResolver)
     }
 }
+
+#endif

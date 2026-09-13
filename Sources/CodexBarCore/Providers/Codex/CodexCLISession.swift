@@ -26,11 +26,16 @@ actor CodexCLISession {
         }
     }
 
+    #if os(Windows)
+    private var process: WindowsManagedProcess?
+    private var console: WindowsPseudoConsole?
+    #else
     private var process: Process?
     private var primaryFD: Int32 = -1
     private var primaryHandle: FileHandle?
     private var secondaryHandle: FileHandle?
     private var processGroup: pid_t?
+    #endif
     private var binaryPath: String?
     private var startedAt: Date?
     private var ptyRows: UInt16 = 0
@@ -61,7 +66,7 @@ actor CodexCLISession {
                 try await Task.sleep(nanoseconds: delay)
             }
         }
-        self.drainOutput()
+        try self.drainOutput()
 
         let script = "/status"
         let cursorQuery = Data([0x1B, 0x5B, 0x36, 0x6E])
@@ -89,7 +94,7 @@ actor CodexCLISession {
         var sawCodexUpdatePrompt = false
 
         while Date() < deadline {
-            let newData = self.readChunk()
+            let newData = try self.readChunk()
             if !newData.isEmpty {
                 try appendOutput(newData)
             }
@@ -180,7 +185,7 @@ actor CodexCLISession {
         if sawCodexStatus {
             let settleDeadline = Date().addingTimeInterval(2.0)
             while Date() < settleDeadline {
-                let newData = self.readChunk()
+                let newData = try self.readChunk()
                 if !newData.isEmpty {
                     try appendOutput(newData)
                 }
@@ -225,6 +230,23 @@ actor CodexCLISession {
         }
         self.cleanup()
 
+        #if os(Windows)
+        let console = try WindowsPseudoConsole(rows: options.rows, columns: options.cols)
+        do {
+            self.process = try WindowsManagedProcess.launch(
+                binary: binary,
+                arguments: options.extraArgs,
+                environment: TTYCommandRunner.enrichedEnvironment(
+                    baseEnv: options.environment,
+                    home: options.environment["HOME"] ?? NSHomeDirectory()),
+                workingDirectory: options.workingDirectory,
+                console: console)
+            self.console = console
+        } catch {
+            console.close()
+            throw SessionError.launchFailed(error.localizedDescription)
+        }
+        #else
         var primaryFD: Int32 = -1
         var secondaryFD: Int32 = -1
         var win = winsize(ws_row: options.rows, ws_col: options.cols, ws_xpixel: 0, ws_ypixel: 0)
@@ -288,6 +310,7 @@ actor CodexCLISession {
         self.primaryHandle = primaryHandle
         self.secondaryHandle = secondaryHandle
         self.processGroup = processGroup
+        #endif
         self.binaryPath = binary
         self.startedAt = Date()
         self.ptyRows = options.rows
@@ -298,6 +321,11 @@ actor CodexCLISession {
     }
 
     private func cleanup() {
+        #if os(Windows)
+        self.process?.close()
+        self.console?.close()
+        self.console = nil
+        #else
         if let proc = self.process, proc.isRunning, let handle = self.primaryHandle {
             try? handle.write(contentsOf: Data("/exit\n".utf8))
         }
@@ -334,11 +362,12 @@ actor CodexCLISession {
             TTYCommandRunner.unregisterActiveProcessForAppShutdown(pid: proc.processIdentifier)
         }
 
-        self.process = nil
         self.primaryHandle = nil
         self.secondaryHandle = nil
         self.primaryFD = -1
         self.processGroup = nil
+        #endif
+        self.process = nil
         self.binaryPath = nil
         self.startedAt = nil
         self.ptyRows = 0
@@ -348,7 +377,19 @@ actor CodexCLISession {
         self.sessionWorkingDirectory = nil
     }
 
-    private func readChunk() -> Data {
+    private func readChunk() throws -> Data {
+        #if os(Windows)
+        guard let console = self.console else { throw SessionError.processExited }
+        do {
+            return try console.readAvailable().data
+        } catch SubprocessRunnerError.outputTooLarge {
+            self.cleanup()
+            throw SessionError.outputTooLarge
+        } catch {
+            self.cleanup()
+            throw SessionError.launchFailed(error.localizedDescription)
+        }
+        #else
         guard self.primaryFD >= 0 else { return Data() }
         var appended = Data()
         while true {
@@ -361,15 +402,21 @@ actor CodexCLISession {
             break
         }
         return appended
+        #endif
     }
 
-    private func drainOutput() {
-        _ = self.readChunk()
+    private func drainOutput() throws {
+        _ = try self.readChunk()
     }
 
     private func send(_ text: String) throws {
+        #if os(Windows)
+        guard let console = self.console else { throw SessionError.processExited }
+        try console.send(text)
+        #else
         guard let data = text.data(using: .utf8) else { return }
         guard let handle = self.primaryHandle else { throw SessionError.processExited }
         try handle.write(contentsOf: data)
+        #endif
     }
 }

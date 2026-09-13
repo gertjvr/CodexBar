@@ -68,7 +68,11 @@ extension CodexBarCLI {
         if env["TERM"]?.lowercased() == "dumb" {
             return false
         }
+        #if os(Windows)
+        return CLIWindowsConsole.enableOutputColor()
+        #else
         return isatty(STDOUT_FILENO) == 1
+        #endif
     }
 
     static func detectVersion(for provider: UsageProvider, browserDetection: BrowserDetection) -> String? {
@@ -146,6 +150,7 @@ extension CodexBarCLI {
 
     static func fetchStatus(
         for provider: UsageProvider,
+        includeComponents: Bool = false,
         transport: any ProviderHTTPTransport = ProviderHTTPClient(session: .shared)) async -> ProviderStatusPayload?
     {
         let urlString = ProviderDescriptorRegistry.descriptor(for: provider).metadata.statusPageURL
@@ -153,11 +158,21 @@ extension CodexBarCLI {
               let baseURL = URL(string: urlString) else { return nil }
         do {
             let status = try await ProviderStatusFetcher.fetchStatus(from: baseURL, transport: transport)
+            var components: [ProviderStatusComponent]?
+            if includeComponents,
+               let summary = try? await ProviderStatusFetcher.fetchStatusSummary(from: baseURL, transport: transport)
+            {
+                let allowlist = ProviderDescriptorRegistry.descriptor(for: provider).metadata.statusComponentAllowlist
+                components = summary.components.map { rows in
+                    rows.filter { allowlist?.contains($0.name) ?? true }
+                }
+            }
             return ProviderStatusPayload(
                 indicator: status.indicator,
                 description: status.description,
                 updatedAt: status.updatedAt,
-                url: urlString)
+                url: urlString,
+                components: components)
         } catch {
             return ProviderStatusPayload(
                 indicator: .unknown,

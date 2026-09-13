@@ -219,8 +219,8 @@ extension ClaudeStatusProbe {
     }
 
     public static func parse(text: String, statusText: String? = nil) throws -> ClaudeStatusSnapshot {
-        let clean = TextParsing.stripANSICodes(text)
-        let statusClean = statusText.map(TextParsing.stripANSICodes)
+        let clean = TextParsing.stripANSICodes(TerminalScreenText.render(text))
+        let statusClean = statusText.map { TextParsing.stripANSICodes(TerminalScreenText.render($0)) }
         guard !clean.isEmpty else { throw ClaudeStatusProbeError.timedOut }
 
         let shouldDump = ProcessInfo.processInfo.environment["DEBUG_CLAUDE_DUMP"] == "1"

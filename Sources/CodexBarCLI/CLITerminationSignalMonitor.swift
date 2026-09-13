@@ -7,11 +7,37 @@ import Darwin
 import Glibc
 #elseif canImport(Musl)
 import Musl
+#elseif os(Windows)
+import ucrt
 #endif
 
 private func handleCLITerminationSignal(_: Int32) {}
 
 final class CLITerminationSignalMonitor: @unchecked Sendable {
+    #if os(Windows)
+    static let signalNumbers: [Int32] = [2, 15]
+    private let monitor: CLIWindowsControlMonitor
+
+    init(onSignal: @escaping @Sendable (Int32) -> Void) {
+        do {
+            self.monitor = try CLIWindowsControlMonitor(onSignal: onSignal) {
+                TTYCommandRunner.terminateActiveProcessesForAppShutdown()
+            }
+        } catch {
+            CodexBarCLI.writeStderr("\(error.localizedDescription)\n")
+            CodexBarCLI.platformExit(1)
+        }
+    }
+
+    func cancel() {
+        self.monitor.cancel()
+    }
+
+    static func terminateActiveHelpersAndReraise(_ signalNumber: Int32) {
+        TTYCommandRunner.terminateActiveProcessesForAppShutdown()
+        ucrt.exit(128 + signalNumber)
+    }
+    #else
     static let signalNumbers = [SIGINT, SIGTERM, SIGHUP]
 
     private let lock = NSLock()
@@ -76,4 +102,5 @@ final class CLITerminationSignalMonitor: @unchecked Sendable {
         _ = Musl.signal(signalNumber, SIG_DFL)
         #endif
     }
+    #endif
 }

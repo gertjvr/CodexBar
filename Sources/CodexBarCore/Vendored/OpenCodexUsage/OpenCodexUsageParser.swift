@@ -102,12 +102,20 @@ public enum OpenCodexUsageParser {
         }
         defer { try? handle.close() }
 
+        #if os(Windows)
+        guard let metadata = UsageFileMetadata.read(from: handle) else {
+            throw CocoaError(.fileReadUnknown, userInfo: [NSFilePathErrorKey: fileURL.path])
+        }
+        let fileIdentity = metadata.fileID
+        let size = metadata.size
+        #else
         var status = stat()
         guard fstat(handle.fileDescriptor, &status) == 0 else {
             throw Self.posixError(errno, path: fileURL.path)
         }
         let fileIdentity = "\(status.st_dev):\(status.st_ino)"
         let size = Int64(status.st_size)
+        #endif
         let startOffset = max(0, offset)
         if startOffset > size {
             throw ChangedUnderReadError(path: fileURL.path)

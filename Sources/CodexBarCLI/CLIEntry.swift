@@ -19,13 +19,7 @@ import FoundationNetworking
 enum CodexBarCLI {
     static func main() async {
         if CodexBarCoreResourceSmoke.isRequested() {
-            #if canImport(Darwin)
-            Darwin.exit(CodexBarCoreResourceSmoke.run())
-            #elseif canImport(Glibc)
-            Glibc.exit(CodexBarCoreResourceSmoke.run())
-            #elseif canImport(Musl)
-            Musl.exit(CodexBarCoreResourceSmoke.run())
-            #endif
+            platformExit(CodexBarCoreResourceSmoke.run())
         }
         self.configureLinuxTimeZoneIfNeeded()
 
