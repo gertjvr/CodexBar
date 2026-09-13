@@ -1,4 +1,4 @@
-param([switch]$TestPlugins)
+param([switch]$WithTray, [switch]$TestPlugins)
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
@@ -46,12 +46,29 @@ $buildArguments = @(
     "-Xswiftc", "-gnone",
     "-Xcc", "-I$sqliteSource", "-Xlinker", "/LIBPATH:$sqliteDirectory"
 )
+if ($WithTray) {
+    $iconDirectory = Join-Path $env:RUNNER_TEMP "codexbar-windows-icon"
+    & (Join-Path $PSScriptRoot "build_windows_icon.ps1") -OutputDirectory $iconDirectory
+    # Keep shared compiler arguments identical for both products so SwiftPM reuses the core build.
+    $buildArguments += @("-Xlinker", (Join-Path $iconDirectory "codexbar.res"))
+}
 Invoke-LoggedCommand "build" "swift" $buildArguments
 $binDirectory = & swift @buildArguments --show-bin-path
 if ($LASTEXITCODE -ne 0) { throw "Could not resolve the CLI output directory." }
 $binDirectory = ($binDirectory | Select-Object -Last 1).Trim()
 if (-not (Test-Path (Join-Path $binDirectory "CodexBarCLI.exe"))) {
     throw "The build did not produce CodexBarCLI.exe."
+}
+if ($WithTray) {
+    $trayArguments = $buildArguments.Clone()
+    $productIndex = [Array]::IndexOf($trayArguments, "--product")
+    if ($productIndex -lt 0 -or $productIndex + 1 -ge $trayArguments.Count) {
+        throw "The build arguments do not contain a product selection."
+    }
+    $trayArguments[$productIndex + 1] = "CodexBarWindowsTray"
+    Invoke-LoggedCommand "build-tray" "swift" $trayArguments
+    $tray = Join-Path $binDirectory "CodexBarWindowsTray.exe"
+    if (-not (Test-Path $tray)) { throw "The build did not produce CodexBarWindowsTray.exe." }
 }
 if ($TestPlugins) {
     $testEnvironment = @{}
