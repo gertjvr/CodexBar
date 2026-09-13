@@ -20,6 +20,8 @@ concurrency:
 
 jobs:
   build:
+    # Windows releases publish their own native packages.
+    if: ${{ github.event_name != 'release' || !startsWith(github.event.release.tag_name, 'windows-') }}
     strategy:
       fail-fast: false
       matrix:

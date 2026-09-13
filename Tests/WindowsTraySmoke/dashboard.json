@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-12T10:00:00Z",
+  "staleAfterSeconds": 180,
+  "host": {"codexBarVersion": "fixture", "refreshIntervalSeconds": 120},
+  "providers": [
+    {
+      "id": "codex", "name": "Codex", "enabled": true, "source": "fixture",
+      "identity": {"accountEmail": "codex@example.test", "plan": "Plus"},
+      "windows": [
+        {"kind": "primary", "label": "Session", "usedPercent": 24, "remainingPercent": 76, "resetAt": "2026-09-12T15:00:00Z"},
+        {"kind": "secondary", "label": "Weekly", "usedPercent": 38, "remainingPercent": 62, "resetAt": "2026-09-16T10:00:00Z"}
+      ],
+      "credits": {"remaining": 18.75, "unit": "USD"},
+      "cost": {"todayUSD": 0.34, "last30DaysUSD": 23.60},
+      "status": {"level": "operational", "label": "All systems operational"},
+      "display": {"accentColor": "#74AA9C", "sortKey": 0, "priority": "primary"},
+      "updatedAt": "2026-09-12T10:00:00Z"
+    },
+    {
+      "id": "claude", "name": "Claude", "enabled": true, "source": "fixture",
+      "identity": {"accountEmail": "claude@example.test", "plan": "Max"},
+      "windows": [
+        {"kind": "primary", "label": "Session", "usedPercent": 12, "remainingPercent": 88},
+        {"kind": "secondary", "label": "Weekly", "usedPercent": 31, "remainingPercent": 69}
+      ],
+      "display": {"accentColor": "#C67C5C", "sortKey": 1, "priority": "primary"},
+      "updatedAt": "2026-09-12T10:00:00Z"
+    }
+  ]
+}
