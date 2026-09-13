@@ -849,7 +849,7 @@ enum RPCWireError: Error, LocalizedError {
 private final class CodexRPCClient: @unchecked Sendable {
     // Provider-specific by design: Codex RPC owns its dedicated subprocess log category.
     private static let log = CodexBarLog.logger(LogCategories.provider(.codex, scope: "rpc"))
-    private let process = Process()
+    private let process = RPCChildProcess()
     private let stdin = RPCChildProcessInput()
     private let stdoutPipe = Pipe()
     private let stderrPipe = Pipe()
@@ -889,20 +889,19 @@ private final class CodexRPCClient: @unchecked Sendable {
             env: env,
             loginPATH: loginPATH)
 
-        self.process.environment = env
-        self.process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        self.process.arguments = [resolvedExec] + arguments
-        self.process.standardInput = self.stdin.pipe
-        self.process.standardOutput = self.stdoutPipe
-        self.process.standardError = self.stderrPipe
-
         if let message = CodexCLILaunchGate.shared.backgroundSkipMessage(binary: resolvedExec) {
             Self.log.warning("Codex RPC launch skipped after recent launch failure", metadata: ["binary": resolvedExec])
             throw RPCWireError.startFailed(message)
         }
 
         do {
-            try self.process.run()
+            try self.process.launch(
+                executable: resolvedExec,
+                arguments: arguments,
+                environment: env,
+                stdin: self.stdin.pipe,
+                stdout: self.stdoutPipe,
+                stderr: self.stderrPipe)
             Self.log.debug("Codex RPC started", metadata: ["binary": resolvedExec])
         } catch {
             let message = error.localizedDescription

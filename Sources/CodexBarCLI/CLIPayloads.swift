@@ -116,6 +116,7 @@ struct ProviderStatusPayload: Encodable {
     let description: String?
     let updatedAt: Date?
     let url: String
+    var components: [ProviderStatusComponent]?
 
     var descriptionSuffix: String {
         guard let description, !description.isEmpty else { return "" }

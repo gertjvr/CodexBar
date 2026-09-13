@@ -7,7 +7,8 @@ import Musl
 #endif
 import Foundation
 
-/// Writes credential-bearing files (session tokens, cookies) with owner-only (`0600`) permissions
+/// Writes credential-bearing files (session tokens, cookies) with owner-only permissions
+/// (`0600` on Unix, a protected current-user DACL on Windows)
 /// established **before** any bytes are written, then atomically published — the same secure shape
 /// `CodexOAuthCredentials` already uses. Also repairs the mode of a pre-existing file so users who
 /// upgrade from a build that wrote `0644` are corrected on first access.
@@ -32,6 +33,16 @@ enum CredentialFileWriter {
 
         let staged = directory.appendingPathComponent(
             ".\(url.lastPathComponent).codexbar-staged-\(UUID().uuidString)", isDirectory: false)
+        #if os(Windows)
+        try WindowsPrivateFile.write(data, to: staged)
+        do {
+            try beforePublish?(staged)
+            try WindowsPrivateFile.publish(staged, to: url)
+        } catch {
+            try? fm.removeItem(at: staged)
+            throw error
+        }
+        #else
         let descriptor = staged.path.withCString {
             open($0, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode_t(0o600))
         }
@@ -59,19 +70,25 @@ enum CredentialFileWriter {
             try? fm.removeItem(at: staged)
             throw error
         }
+        #endif
     }
 
     /// If `url` exists and is readable by group or others, restrict it to `0600`. Best-effort;
     /// used to remediate credential files created `0644` by earlier builds when they are next read.
     static func repairPermissions(at url: URL) {
+        #if os(Windows)
+        try? WindowsPrivateFile.repairPermissions(at: url)
+        #else
         let fm = FileManager.default
         guard let attributes = try? fm.attributesOfItem(atPath: url.path),
               let mode = (attributes[.posixPermissions] as? NSNumber)?.uint16Value,
               (mode & 0o077) != 0
         else { return }
         try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        #endif
     }
 
+    #if !os(Windows)
     private static func posixError(_ code: Int32, path: String) -> Error {
         NSError(
             domain: NSPOSIXErrorDomain,
@@ -81,4 +98,5 @@ enum CredentialFileWriter {
                 NSLocalizedDescriptionKey: String(cString: strerror(code)),
             ])
     }
+    #endif
 }

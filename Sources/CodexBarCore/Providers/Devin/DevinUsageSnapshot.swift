@@ -1,4 +1,3 @@
-import CoreFoundation
 import Foundation
 
 public enum DevinUsageError: LocalizedError, Sendable {
@@ -105,7 +104,7 @@ public enum DevinUsageParser {
     public static func parse(_ object: Any, organization: String?, now: Date = Date()) throws -> DevinUsageSnapshot {
         let dictionary = object as? [String: Any]
         let hideDaily = (dictionary?["hide_daily_quota"] as? NSNumber)
-            .map { CFGetTypeID($0) == CFBooleanGetTypeID() && $0.boolValue } ?? false
+            .map { JSONNumber.isBoolean($0) && $0.boolValue } ?? false
         let daily = hideDaily ? nil : self.currentQuotaWindow(
             percent: dictionary?["daily_percentage"],
             resetsAt: dictionary?["daily_reset_at"]) ?? self.findWindow(in: object, matching: self.isDailyKey)
@@ -300,7 +299,7 @@ public enum DevinUsageParser {
     private static func double(_ value: Any?) -> Double? {
         switch value {
         case let number as NSNumber:
-            CFGetTypeID(number) == CFBooleanGetTypeID() ? nil : number.doubleValue
+            JSONNumber.isBoolean(number) ? nil : number.doubleValue
         case let string as String:
             Double(string.trimmingCharacters(in: .whitespacesAndNewlines))
         default:

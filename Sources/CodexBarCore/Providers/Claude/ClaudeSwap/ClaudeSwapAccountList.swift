@@ -1,4 +1,3 @@
-import CoreFoundation
 import Foundation
 
 /// Strictly parsed result of `cswap --list --json` (schema v1).
@@ -323,7 +322,7 @@ public enum ClaudeSwapListParser {
     private static func finiteDouble(_ raw: Any?) -> Double? {
         guard let number = raw as? NSNumber else { return nil }
         // JSON booleans bridge to NSNumber too; only accept genuine numbers.
-        guard CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        guard !JSONNumber.isBoolean(number) else { return nil }
         let value = number.doubleValue
         return value.isFinite ? value : nil
     }

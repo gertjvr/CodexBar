@@ -299,6 +299,9 @@ extension CodexBarCLI {
 
         let staged = directory.appendingPathComponent(
             ".\(url.lastPathComponent).codexbar-dashboard-\(UUID().uuidString)", isDirectory: false)
+        #if os(Windows)
+        try CLIWindowsDashboardOutput.write(data, to: url, staged: staged)
+        #else
         let descriptor = staged.path.withCString {
             open($0, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode_t(0o644))
         }
@@ -325,6 +328,7 @@ extension CodexBarCLI {
             try? FileManager.default.removeItem(at: staged)
             throw error
         }
+        #endif
     }
 
     private static func dashboardOutputPOSIXError(_ code: Int32, path: String) -> Error {

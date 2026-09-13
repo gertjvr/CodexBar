@@ -850,7 +850,7 @@ public struct AntigravityStatusProbe: Sendable {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 120
-        #if !os(Linux)
+        #if canImport(Darwin)
         config.waitsForConnectivity = false
         #endif
         return URLSession(configuration: config, delegate: Self.localhostDelegate, delegateQueue: nil)

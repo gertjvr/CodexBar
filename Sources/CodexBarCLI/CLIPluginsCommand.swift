@@ -96,7 +96,11 @@ extension CodexBarCLI {
     }
 
     private static var isInteractiveTerminal: Bool {
+        #if os(Windows)
+        CLIWindowsConsole.isInteractive
+        #else
         isatty(STDIN_FILENO) == 1 && isatty(STDERR_FILENO) == 1
+        #endif
     }
 
     private static func confirmPluginApproval(_ binding: ProviderPluginApprovalBinding) -> Bool {

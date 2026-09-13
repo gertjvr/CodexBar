@@ -1351,13 +1351,13 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This provider-owned adapter passes its fixed identity to shared logging or cache infrastructure."),
         SuppressedProviderReference(
             path: "Sources/CodexBarCLI/CLICardsRenderer.swift",
-            line: 230,
+            line: 235,
             anchor: "provider: .claude,",
             expectedProviderIDs: ["claude"],
             reason: "This provider-specific app branch passes its already-selected identity to a shared helper."),
         SuppressedProviderReference(
             path: "Sources/CodexBarCLI/CLICardsRenderer.swift",
-            line: 231,
+            line: 236,
             anchor: "title: ProviderDescriptorRegistry.descriptor(for: .claude).metadata.displayName,",
             expectedProviderIDs: ["claude"],
             reason: "This provider-specific app branch passes its already-selected identity to a shared helper."),
@@ -1555,7 +1555,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This tagged diagnostic payload encodes MiniMax details under the matching wire key."),
         SuppressedProviderReference(
             path: "Sources/CodexBarCore/UsageFetcher.swift",
-            line: 1480,
+            line: 1479,
             anchor: "providerID: .codex,",
             expectedProviderIDs: ["codex"],
             reason: "This provider-specific core branch passes its already-selected identity to a shared helper."),
@@ -1657,13 +1657,13 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "OpenCode Go reads the upstream OpenCode shared storage directory by contract."),
         SuppressedProviderReference(
             path: "Sources/CodexBarCore/Providers/ProviderVersionDetector.swift",
-            line: 147,
+            line: 169,
             anchor: "return whichHook(\"claude\") != nil",
             expectedProviderIDs: ["claude"],
             reason: "The Claude binary resolvability check asks its injected locator for the fixed executable name."),
         SuppressedProviderReference(
             path: "Sources/CodexBarCore/Providers/ProviderVersionDetector.swift",
-            line: 158,
+            line: 180,
             anchor: "? self.whichHook!(\"claude\")",
             expectedProviderIDs: ["claude"],
             reason: "The Claude version detector asks its injected locator for the fixed Claude executable name."),
@@ -3666,7 +3666,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact error branch renders the MiniMax-specific endpoint validation failure."),
         AllowedProviderConstruct(
             path: "Sources/CodexBarCore/PathEnvironment.swift",
-            line: 561,
+            line: 584,
             anchor: ".appendingPathComponent(\"codex\")",
             expectedProviderIDs: ["codex"],
             expectedReferenceCount: 2,
