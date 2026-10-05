@@ -4,6 +4,8 @@ import Foundation
 import Darwin
 #elseif canImport(Glibc)
 import Glibc
+#elseif os(Windows)
+import WinSDK
 #endif
 
 /// Crash-safety harness for the SQLite cost store. The `CodexBarCostStoreCrashProbe`
@@ -73,7 +75,14 @@ package enum CostUsageStoreCrashHarness {
             var hooks = CostUsageStoreTestHooks.current
             hooks.saveCycleCheckpoint = { persistedFiles in
                 if persistedFiles >= killAfterFiles {
+                    #if os(Windows)
+                    // TerminateProcess ends the process without running transaction cleanup or defers.
+                    guard TerminateProcess(GetCurrentProcess(), 9) else {
+                        fatalError("Unable to terminate crash fixture")
+                    }
+                    #else
                     kill(getpid(), SIGKILL)
+                    #endif
                 }
             }
             return CostUsageStoreTestHooks.$current.withValue(hooks) {

@@ -26,7 +26,7 @@ package struct ProviderStatus: Sendable {
 }
 
 /// A status service or a group of services. Raw statuses remain separate from localized display labels.
-package struct ProviderStatusComponent: Identifiable, Equatable, Sendable {
+package struct ProviderStatusComponent: Identifiable, Equatable, Encodable, Sendable {
     package let id: String
     package let name: String
     package let indicator: ProviderStatusIndicator

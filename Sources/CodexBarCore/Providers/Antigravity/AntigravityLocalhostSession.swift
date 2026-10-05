@@ -9,7 +9,7 @@ enum LocalhostTrustPolicy {
         authenticationMethod: String,
         hasServerTrust: Bool) -> Bool
     {
-        #if !os(Linux)
+        #if canImport(Darwin)
         guard authenticationMethod == NSURLAuthenticationMethodServerTrust else { return false }
         #endif
         let normalizedHost = host.lowercased()
@@ -46,7 +46,7 @@ final class LocalhostSessionDelegate: NSObject {
         disposition: URLSession.AuthChallengeDisposition,
         credential: URLCredential?)
     {
-        #if os(Linux)
+        #if !canImport(Darwin)
         return (.performDefaultHandling, nil)
         #else
         let protectionSpace = challenge.protectionSpace

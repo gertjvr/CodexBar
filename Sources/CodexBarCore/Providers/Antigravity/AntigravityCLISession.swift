@@ -10,18 +10,18 @@ import Foundation
 // MARK: - Antigravity CLI Process Abstractions
 
 protocol AntigravityCLIProcessHandle: AnyObject, Sendable {
-    var pid: pid_t { get }
+    var pid: Int32 { get }
     var isRunning: Bool { get }
-    var processGroup: pid_t? { get }
+    var processGroup: Int32? { get }
 
-    func assignProcessGroup() -> pid_t?
+    func assignProcessGroup() -> Int32?
     func sendExit() throws
     func closePTY()
     func terminateRoot()
     func killRoot()
-    func descendantPIDs() -> [pid_t]
-    func terminateTree(signal: Int32, knownDescendants: [pid_t])
-    func killDescendants(_ descendants: [pid_t])
+    func descendantPIDs() -> [Int32]
+    func terminateTree(signal: Int32, knownDescendants: [Int32])
+    func killDescendants(_ descendants: [Int32])
     func drainOutput() -> Data
 }
 
@@ -59,26 +59,26 @@ struct AntigravityCLIProcessIdentity: Equatable {
 }
 
 protocol AntigravityCLIProcessIdentityProviding: Sendable {
-    func identity(for pid: pid_t) -> AntigravityCLIProcessIdentity?
+    func identity(for pid: Int32) -> AntigravityCLIProcessIdentity?
 }
 
 struct AntigravityCLISessionRecord: Codable, Equatable {
-    let pid: pid_t
+    let pid: Int32
     let requestedBinaryPath: String
     let executablePath: String
     let startEpoch: TimeInterval
-    let processGroup: pid_t?
-    let ownerPID: pid_t?
+    let processGroup: Int32?
+    let ownerPID: Int32?
     let ownerExecutablePath: String?
     let ownerStartEpoch: TimeInterval?
 
     init(
-        pid: pid_t,
+        pid: Int32,
         requestedBinaryPath: String,
         executablePath: String,
         startEpoch: TimeInterval,
-        processGroup: pid_t?,
-        ownerPID: pid_t? = nil,
+        processGroup: Int32?,
+        ownerPID: Int32? = nil,
         ownerExecutablePath: String? = nil,
         ownerStartEpoch: TimeInterval? = nil)
     {
@@ -136,7 +136,7 @@ actor AntigravityCLISession {
     }
 
     private struct LaunchOutcome {
-        let pid: pid_t
+        let pid: Int32
         let rejectedProcess: (any AntigravityCLIProcessHandle)?
         let rejectionMessage: String?
         let holdsLaunchReservation: Bool
@@ -149,12 +149,12 @@ actor AntigravityCLISession {
         var launchLock: any AntigravityCLISessionLaunchLocking
         var beginAppShutdownTrackedLaunch: @Sendable () -> Bool
         var endAppShutdownTrackedLaunch: @Sendable () -> Void
-        var registerForAppShutdown: @Sendable (pid_t, String) -> Bool
-        var updateAppShutdownProcessGroup: @Sendable (pid_t, pid_t?) -> Void
-        var unregisterForAppShutdown: @Sendable (pid_t) -> Void
-        var descendantPIDs: @Sendable (pid_t) -> [pid_t]
-        var terminateProcessTree: @Sendable (pid_t, pid_t?, Int32, [pid_t]) -> Void
-        var currentProcessID: @Sendable () -> pid_t
+        var registerForAppShutdown: @Sendable (Int32, String) -> Bool
+        var updateAppShutdownProcessGroup: @Sendable (Int32, Int32?) -> Void
+        var unregisterForAppShutdown: @Sendable (Int32) -> Void
+        var descendantPIDs: @Sendable (Int32) -> [Int32]
+        var terminateProcessTree: @Sendable (Int32, Int32?, Int32, [Int32]) -> Void
+        var currentProcessID: @Sendable () -> Int32
         var now: @Sendable () -> Date
         var sleep: @Sendable (UInt64) async throws -> Void
         var idleWindow: TimeInterval
@@ -162,6 +162,27 @@ actor AntigravityCLISession {
         var terminationGracePeriod: TimeInterval
 
         static func live() -> Self {
+            #if os(Windows)
+            return Self(
+                launcher: AntigravityPTYProcessLauncher(),
+                identityProvider: AntigravityProcessIdentityProvider(),
+                recordStore: AntigravityFileCLISessionRecordStore(),
+                launchLock: AntigravityFileCLISessionLaunchLock(),
+                beginAppShutdownTrackedLaunch: { WindowsManagedProcess.beginLaunch() },
+                endAppShutdownTrackedLaunch: { WindowsManagedProcess.endLaunch() },
+                registerForAppShutdown: { pid, _ in WindowsManagedProcess.acceptsRegisteredProcess(pid: pid) },
+                // Windows job assignment happens before resume; a POSIX process group must never be installed.
+                updateAppShutdownProcessGroup: { _, group in precondition(group == nil) },
+                unregisterForAppShutdown: { WindowsManagedProcess.closeOwnedProcess(pid: $0) },
+                descendantPIDs: { WindowsManagedProcess.ownedDescendants(pid: $0) },
+                terminateProcessTree: { pid, _, _, _ in WindowsManagedProcess.closeOwnedProcess(pid: pid) },
+                currentProcessID: { WindowsProcessIdentity.currentProcessID },
+                now: Date.init,
+                sleep: { try await Task.sleep(nanoseconds: $0) },
+                idleWindow: 180,
+                failureRelaunchThreshold: 2,
+                terminationGracePeriod: 1)
+            #else
             Self(
                 launcher: AntigravityPTYProcessLauncher(),
                 identityProvider: AntigravityProcessIdentityProvider(),
@@ -200,6 +221,7 @@ actor AntigravityCLISession {
                 idleWindow: 180,
                 failureRelaunchThreshold: 2,
                 terminationGracePeriod: 1)
+            #endif
         }
     }
 
@@ -232,7 +254,7 @@ actor AntigravityCLISession {
 
     /// The pid of the running ``agy`` process, exposed so callers can discover
     /// its listening ports via `lsof`.
-    var pid: pid_t? {
+    var pid: Int32? {
         guard let proc = self.process, proc.isRunning else { return nil }
         return proc.pid
     }
@@ -267,7 +289,7 @@ actor AntigravityCLISession {
     /// idle/reset cleanup cannot kill the process while its ports are being probed.
     /// If previous probes repeatedly failed while the process stayed alive, this
     /// force-relaunches instead of reusing a wedged HTTPS server forever.
-    func beginProbe(binary: String, idleWindow: TimeInterval? = nil) async throws -> pid_t {
+    func beginProbe(binary: String, idleWindow: TimeInterval? = nil) async throws -> Int32 {
         self.activeProbeCount += 1
         if let idleWindow, idleWindow > 0 {
             self.sessionIdleWindow = max(self.dependencies.idleWindow, idleWindow)
@@ -383,7 +405,7 @@ actor AntigravityCLISession {
     /// - If the process is already alive with the same binary, this returns immediately.
     /// - If the process died, the binary changed, or repeated probes failed, it tears down the old one first.
     /// - Returns the process identifier for port discovery.
-    func ensureStarted(binary: String) async throws -> pid_t {
+    func ensureStarted(binary: String) async throws -> Int32 {
         try await self.withLifecycleOperation {
             try await self.ensureStartedLocked(binary: binary)
         }
@@ -495,7 +517,7 @@ actor AntigravityCLISession {
         }
     }
 
-    private func ensureStartedLocked(binary: String) async throws -> pid_t {
+    private func ensureStartedLocked(binary: String) async throws -> Int32 {
         while true {
             if let proc = self.process,
                proc.isRunning,
@@ -711,6 +733,9 @@ actor AntigravityCLISession {
         }
         proc.closePTY()
 
+        #if os(Windows)
+        await self.waitUntilProcessExits(proc, timeout: 1)
+        #else
         let descendants = proc.descendantPIDs()
         if proc.isRunning {
             proc.terminateRoot()
@@ -731,6 +756,7 @@ actor AntigravityCLISession {
         } else {
             proc.killDescendants(descendants)
         }
+        #endif
     }
 
     private func waitUntilProcessExits(_ proc: any AntigravityCLIProcessHandle, timeout: TimeInterval) async {
@@ -742,7 +768,7 @@ actor AntigravityCLISession {
     }
 
     @discardableResult
-    private func persistRecord(pid: pid_t, binary: String, processGroup: pid_t?) -> Bool {
+    private func persistRecord(pid: Int32, binary: String, processGroup: Int32?) -> Bool {
         guard let identity = self.dependencies.identityProvider.identity(for: pid) else {
             self.persistedProcessIdentity = nil
             return false
@@ -795,13 +821,19 @@ actor AntigravityCLISession {
 
             let knownDescendants = self.dependencies.descendantPIDs(record.pid)
             Self.log.debug("Reaping stale Antigravity CLI session", metadata: ["pid": "\(record.pid)"])
+            #if os(Windows)
+            self.dependencies.terminateProcessTree(record.pid, nil, 0, knownDescendants)
+            // Only an owned job may be terminated. Retain a live unmatched record for later inspection.
+            if self.dependencies.identityProvider.identity(for: record.pid) != nil { continue }
+            #else
             self.dependencies.terminateProcessTree(record.pid, record.processGroup, SIGTERM, knownDescendants)
             self.dependencies.terminateProcessTree(record.pid, record.processGroup, SIGKILL, knownDescendants)
+            #endif
             try? self.dependencies.recordStore.remove(record)
         }
     }
 
-    private func removeRecordIfMatches(pid: pid_t, identity: AntigravityCLIProcessIdentity?) {
+    private func removeRecordIfMatches(pid: Int32, identity: AntigravityCLIProcessIdentity?) {
         try? self.dependencies.launchLock.withLock {
             guard let identity, let records = try? self.dependencies.recordStore.load() else { return }
             for record in records
@@ -826,6 +858,7 @@ actor AntigravityCLISession {
 // MARK: - Production Process Implementation
 
 struct AntigravityPTYProcessLauncher: AntigravityCLIProcessLaunching {
+    #if !os(Windows)
     static func defaultSignalsForSpawn() -> sigset_t {
         var signals = sigset_t()
         sigemptyset(&signals)
@@ -852,11 +885,30 @@ struct AntigravityPTYProcessLauncher: AntigravityCLIProcessLaunching {
         return result
     }
 
+    #endif
+
     func launch(binary: String) throws -> any AntigravityCLIProcessHandle {
         try self.launch(binary: binary, arguments: [])
     }
 
     func launch(binary: String, arguments: [String]) throws -> any AntigravityCLIProcessHandle {
+        #if os(Windows)
+        let console = try WindowsPseudoConsole(rows: 50, columns: 160)
+        var environment = TTYCommandRunner.enrichedEnvironment()
+        environment["PWD"] = NSHomeDirectory()
+        do {
+            let process = try WindowsManagedProcess.launch(
+                binary: binary,
+                arguments: arguments,
+                environment: environment,
+                workingDirectory: URL(fileURLWithPath: NSHomeDirectory()),
+                console: console)
+            return AntigravityWindowsProcessHandle(process: process, console: console)
+        } catch {
+            console.close()
+            throw AntigravityCLISession.SessionError.launchFailed(error.localizedDescription)
+        }
+        #else
         var primaryFD: Int32 = -1
         var secondaryFD: Int32 = -1
         var win = winsize(ws_row: 50, ws_col: 160, ws_xpixel: 0, ws_ypixel: 0)
@@ -947,7 +999,7 @@ struct AntigravityPTYProcessLauncher: AntigravityCLIProcessLaunching {
             }
         }
 
-        var pid: pid_t = 0
+        var pid: Int32 = 0
         let spawnResult = Self.spawnWithTextBusyRetry {
             binary.withCString { execPath in
                 posix_spawn(&pid, execPath, &fileActions, &attr, cArgs, cEnv)
@@ -965,21 +1017,23 @@ struct AntigravityPTYProcessLauncher: AntigravityCLIProcessLaunching {
             primaryFD: primaryFD,
             primaryHandle: primaryHandle,
             secondaryHandle: secondaryHandle)
+        #endif
     }
 }
 
+#if !os(Windows)
 final class AntigravitySpawnedPTYProcessHandle: AntigravityCLIProcessHandle, @unchecked Sendable {
     private let lock = NSLock()
-    private let processPID: pid_t
-    private let processGroupID: pid_t
+    private let processPID: Int32
+    private let processGroupID: Int32
     private let primaryFD: Int32
     private let primaryHandle: FileHandle
     private let secondaryHandle: FileHandle
     private var reaped = false
 
     init(
-        pid: pid_t,
-        processGroup: pid_t,
+        pid: Int32,
+        processGroup: Int32,
         primaryFD: Int32,
         primaryHandle: FileHandle,
         secondaryHandle: FileHandle)
@@ -991,7 +1045,7 @@ final class AntigravitySpawnedPTYProcessHandle: AntigravityCLIProcessHandle, @un
         self.secondaryHandle = secondaryHandle
     }
 
-    var pid: pid_t {
+    var pid: Int32 {
         self.processPID
     }
 
@@ -1022,11 +1076,11 @@ final class AntigravitySpawnedPTYProcessHandle: AntigravityCLIProcessHandle, @un
         }
     }
 
-    var processGroup: pid_t? {
+    var processGroup: Int32? {
         self.processGroupID
     }
 
-    func assignProcessGroup() -> pid_t? {
+    func assignProcessGroup() -> Int32? {
         self.processGroupID
     }
 
@@ -1047,11 +1101,11 @@ final class AntigravitySpawnedPTYProcessHandle: AntigravityCLIProcessHandle, @un
         kill(self.processPID, SIGKILL)
     }
 
-    func descendantPIDs() -> [pid_t] {
+    func descendantPIDs() -> [Int32] {
         TTYProcessTreeTerminator.descendantPIDs(of: self.processPID)
     }
 
-    func terminateTree(signal: Int32, knownDescendants: [pid_t]) {
+    func terminateTree(signal: Int32, knownDescendants: [Int32]) {
         TTYProcessTreeTerminator.terminateProcessTree(
             rootPID: self.processPID,
             processGroup: self.processGroupID,
@@ -1059,7 +1113,7 @@ final class AntigravitySpawnedPTYProcessHandle: AntigravityCLIProcessHandle, @un
             knownDescendants: knownDescendants)
     }
 
-    func killDescendants(_ descendants: [pid_t]) {
+    func killDescendants(_ descendants: [Int32]) {
         for pid in descendants where pid > 0 {
             kill(pid, SIGKILL)
         }
@@ -1110,15 +1164,24 @@ final class AntigravitySpawnedPTYProcessHandle: AntigravityCLIProcessHandle, @un
     }
 }
 
+#endif
+
 // MARK: - Production Stale Session Identity + Storage
 
 struct AntigravityProcessIdentityProvider: AntigravityCLIProcessIdentityProviding {
-    static var currentUserID: UInt32 {
-        UInt32(getuid())
+    static var currentUserID: String {
+        #if os(Windows)
+        // Failed token lookup cannot equal a valid owner SID.
+        WindowsProcessIdentity.currentUserSID ?? ""
+        #else
+        String(getuid())
+        #endif
     }
 
-    func ownerUserID(for pid: pid_t) -> UInt32? {
-        #if canImport(Darwin)
+    func ownerUserID(for pid: Int32) -> String? {
+        #if os(Windows)
+        return WindowsProcessIdentity.ownerSID(pid: pid)
+        #elseif canImport(Darwin)
         var info = proc_bsdinfo()
         let size = proc_pidinfo(
             pid,
@@ -1127,7 +1190,7 @@ struct AntigravityProcessIdentityProvider: AntigravityCLIProcessIdentityProvidin
             &info,
             Int32(MemoryLayout<proc_bsdinfo>.stride))
         guard size == Int32(MemoryLayout<proc_bsdinfo>.stride) else { return nil }
-        return info.pbi_uid
+        return String(info.pbi_uid)
         #else
         guard let status = try? String(contentsOfFile: "/proc/\(pid)/status", encoding: .utf8),
               let uidLine = status.split(separator: "\n").first(where: { $0.hasPrefix("Uid:") }),
@@ -1136,12 +1199,17 @@ struct AntigravityProcessIdentityProvider: AntigravityCLIProcessIdentityProvidin
         else {
             return nil
         }
-        return userID
+        return String(userID)
         #endif
     }
 
-    func identity(for pid: pid_t) -> AntigravityCLIProcessIdentity? {
-        #if canImport(Darwin)
+    func identity(for pid: Int32) -> AntigravityCLIProcessIdentity? {
+        #if os(Windows)
+        guard let identity = WindowsProcessIdentity.read(pid: pid) else { return nil }
+        return AntigravityCLIProcessIdentity(
+            executablePath: identity.executablePath,
+            startEpoch: identity.startEpoch)
+        #elseif canImport(Darwin)
         var pathBuffer = [CChar](repeating: 0, count: 4096)
         let pathLength = proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count))
         guard pathLength > 0 else { return nil }
@@ -1286,20 +1354,6 @@ final class AntigravityFileCLISessionLaunchLock: AntigravityCLISessionLaunchLock
     func withLock<T>(_ operation: () throws -> T) throws -> T {
         let directory = self.fileURL.deletingLastPathComponent()
         try self.fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        let fd = open(self.fileURL.path, O_CREAT | O_RDWR | O_CLOEXEC, S_IRUSR | S_IWUSR)
-        guard fd >= 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
-        defer {
-            _ = flock(fd, LOCK_UN)
-            close(fd)
-        }
-
-        while flock(fd, LOCK_EX) != 0 {
-            guard errno == EINTR else {
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-            }
-        }
-        return try operation()
+        return try InterprocessFileLock.withLock(at: self.fileURL, operation: operation)
     }
 }

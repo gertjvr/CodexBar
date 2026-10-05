@@ -24,6 +24,7 @@ struct DashboardAntigravityWindowTests {
             "Claude/GPT weekly",
         ])
         #expect(windows.map { $0["usedPercent"] as? Double } == [3.9, 8.1, 1.5, 2.5])
+        #expect(windows.allSatisfy { $0["usageKnown"] == nil })
         // The key is absent rather than false, so a payload with no idle window keeps its old shape.
         #expect(windows.allSatisfy { $0["idle"] == nil })
     }
@@ -68,6 +69,7 @@ struct DashboardAntigravityWindowTests {
 
         #expect(windows.count == 4)
         #expect(windows.allSatisfy { $0["idle"] == nil })
+        #expect(windows.map { $0["usageKnown"] as? Bool } == [nil, nil, false, false])
     }
 
     @Test

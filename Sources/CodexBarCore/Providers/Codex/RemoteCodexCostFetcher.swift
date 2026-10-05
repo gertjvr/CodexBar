@@ -115,9 +115,13 @@ public struct RemoteCodexCostFetcher: Sendable {
 
     public init() {
         self.runner = { arguments, environment in
+            #if os(Windows)
+            let binary = Self.windowsSSHExecutable(environment: environment)
+            #else
             let binary = ["/usr/bin/ssh", "/bin/ssh"].first {
                 FileManager.default.isExecutableFile(atPath: $0)
             }
+            #endif
             guard let binary else { throw RemoteCodexCostError.unavailable }
             let result = try await SubprocessRunner.run(
                 binary: binary,
@@ -133,6 +137,24 @@ public struct RemoteCodexCostFetcher: Sendable {
 
     package init(runner: @escaping Runner) {
         self.runner = runner
+    }
+
+    package static func windowsSSHExecutable(
+        environment: [String: String],
+        fileManager: FileManager = .default) -> String?
+    {
+        let paths = WindowsEnvironment.pathEntries(WindowsEnvironment.value("PATH", in: environment) ?? "")
+        if let binary = WindowsEnvironment.findExecutable(
+            "ssh", paths: paths, environment: environment, fileManager: fileManager)
+        {
+            return binary
+        }
+        let configuredRoot = WindowsEnvironment.value("SYSTEMROOT", in: environment) ?? ""
+        let root = WindowsEnvironment.isAbsolutePath(configuredRoot) ? configuredRoot : "C:\\Windows"
+        let openSSH = URL(fileURLWithPath: root, isDirectory: true)
+            .appendingPathComponent("System32/OpenSSH", isDirectory: true).path
+        return WindowsEnvironment.findExecutable(
+            "ssh.exe", paths: [openSSH], environment: environment, fileManager: fileManager)
     }
 
     public static func validateHost(_ host: String) throws {
@@ -168,10 +190,20 @@ public struct RemoteCodexCostFetcher: Sendable {
     {
         try Task.checkCancellation()
         let arguments = try Self.arguments(host: host, historyDays: historyDays, force: force)
-        let allowedEnvironment = Set(["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "SSH_AUTH_SOCK"])
+        var allowedEnvironment = Set(["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "SSH_AUTH_SOCK"])
+        #if os(Windows)
+        // OpenSSH also needs the Windows home and system selectors. Canonicalize before filtering
+        // so caller overrides such as Path/PATH keep Windows' case-insensitive semantics.
+        allowedEnvironment.formUnion(["SYSTEMROOT", "PATHEXT", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"])
+        var commandEnvironment = WindowsEnvironment.canonicalized(environment)
+            .filter { allowedEnvironment.contains($0.key) }
+        commandEnvironment["PATH"] = WindowsEnvironment.effectivePATH(environment: commandEnvironment)
+        #else
+        let commandEnvironment = environment.filter { allowedEnvironment.contains($0.key) }
+        #endif
         let output: String
         do {
-            output = try await self.runner(arguments, environment.filter { allowedEnvironment.contains($0.key) })
+            output = try await self.runner(arguments, commandEnvironment)
         } catch is CancellationError {
             throw CancellationError()
         } catch {

@@ -12,7 +12,7 @@ public enum ProviderVersionDetector {
         let realPath: String
         let modificationDate: Date
         let fileSize: UInt64
-        let inode: UInt64
+        let inode: String
     }
 
     private struct ClaudeVersionCacheEntry {
@@ -59,6 +59,7 @@ public enum ProviderVersionDetector {
     }
 
     private static func resolveRealPath(_ path: String) -> String {
+        #if !os(Windows)
         var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
         if realpath(path, &buffer) != nil {
             return buffer.withUnsafeBufferPointer { rawBuffer in
@@ -66,18 +67,39 @@ public enum ProviderVersionDetector {
                 return String(cString: baseAddress)
             }
         }
+        #endif
         return URL(fileURLWithPath: path).resolvingSymlinksInPath().path
     }
 
     private static func getClaudeFingerprint(forPath path: String) -> ClaudeExecutableFingerprint? {
         let resolvedPath = self.resolveRealPath(path)
         #if DEBUG
-        let attributesOpt = self.attributesHook != nil ? self.attributesHook?(resolvedPath) : try? FileManager.default
-            .attributesOfItem(atPath: resolvedPath)
-        #else
-        let attributesOpt = try? FileManager.default.attributesOfItem(atPath: resolvedPath)
+        if let attributesHook = self.attributesHook {
+            return self.claudeFingerprint(path: resolvedPath, attributes: attributesHook(resolvedPath))
+        }
         #endif
-        guard let attributes = attributesOpt else {
+        #if os(Windows)
+        guard let metadata = UsageFileMetadata.read(at: URL(fileURLWithPath: resolvedPath)), metadata.size >= 0 else {
+            return nil
+        }
+        return ClaudeExecutableFingerprint(
+            realPath: resolvedPath,
+            modificationDate: Date(timeIntervalSince1970:
+                Double(metadata.modifiedSeconds) + Double(metadata.modifiedNanoseconds) / 1_000_000_000),
+            fileSize: UInt64(metadata.size),
+            inode: metadata.fileID)
+        #else
+        return self.claudeFingerprint(
+            path: resolvedPath,
+            attributes: try? FileManager.default.attributesOfItem(atPath: resolvedPath))
+        #endif
+    }
+
+    private static func claudeFingerprint(
+        path: String,
+        attributes: [FileAttributeKey: Any]?) -> ClaudeExecutableFingerprint?
+    {
+        guard let attributes else {
             return nil
         }
         guard let modificationDate = attributes[.modificationDate] as? Date,
@@ -87,10 +109,10 @@ public enum ProviderVersionDetector {
             return nil
         }
         return ClaudeExecutableFingerprint(
-            realPath: resolvedPath,
+            realPath: path,
             modificationDate: modificationDate,
             fileSize: fileSize,
-            inode: inode)
+            inode: String(inode))
     }
 
     private static func runClaudeVersionCommand(path: String) -> String? {
@@ -286,6 +308,18 @@ public enum ProviderVersionDetector {
         environment: [String: String]? = nil,
         mergeStandardError: Bool = false) -> String?
     {
+        #if os(Windows)
+        guard let result = try? WindowsSubprocessRunner.runSynchronously(
+            binary: path,
+            arguments: args,
+            environment: environment ?? ProcessInfo.processInfo.environment,
+            timeout: timeout,
+            mergeStandardError: mergeStandardError),
+            let line = result.stdout.split(whereSeparator: \.isNewline).first
+        else { return nil }
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+        #else
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: path)
         proc.arguments = args
@@ -322,8 +356,10 @@ public enum ProviderVersionDetector {
         else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+        #endif
     }
 
+    #if !os(Windows)
     private static func forceExit(_ proc: Process, exitSemaphore: DispatchSemaphore) -> Bool {
         guard proc.isRunning else { return true }
 
@@ -336,4 +372,5 @@ public enum ProviderVersionDetector {
         kill(proc.processIdentifier, SIGKILL)
         return exitSemaphore.wait(timeout: .now() + 1.0) == .success
     }
+    #endif
 }

@@ -213,6 +213,9 @@ struct DashboardWindowPayload: Encodable {
     /// Additive schema-v1 extension: the key appears only when it is `true`, so every payload that
     /// carries no idle window is byte-identical to the previous shape.
     let idle: Bool
+    /// Unknown lanes remain available to script clients, but display clients must skip them.
+    /// Omitted for measured usage to preserve the existing schema-v1 shape.
+    let usageKnown: Bool
 
     init(
         kind: String,
@@ -220,7 +223,8 @@ struct DashboardWindowPayload: Encodable {
         usedPercent: Double,
         remainingPercent: Double,
         resetAt: Date?,
-        idle: Bool = false)
+        idle: Bool = false,
+        usageKnown: Bool = true)
     {
         self.kind = kind
         self.label = label
@@ -228,6 +232,7 @@ struct DashboardWindowPayload: Encodable {
         self.remainingPercent = remainingPercent
         self.resetAt = resetAt
         self.idle = idle
+        self.usageKnown = usageKnown
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -237,6 +242,7 @@ struct DashboardWindowPayload: Encodable {
         case remainingPercent
         case resetAt
         case idle
+        case usageKnown
     }
 
     func encode(to encoder: Encoder) throws {
@@ -248,6 +254,9 @@ struct DashboardWindowPayload: Encodable {
         try container.encode(self.resetAt, forKey: .resetAt)
         if self.idle {
             try container.encode(true, forKey: .idle)
+        }
+        if !self.usageKnown {
+            try container.encode(false, forKey: .usageKnown)
         }
     }
 }
@@ -263,13 +272,16 @@ struct DashboardCostPayload: Encodable {
 
     let todayIncompleteRequestCount: Int?
     let last30DaysIncompleteRequestCount: Int?
+    let historyScanIsPartial: Bool?
 
     init(
         todayUSD: Double?,
         last30DaysUSD: Double?,
         todayIncompleteRequestCount: Int? = nil,
-        last30DaysIncompleteRequestCount: Int? = nil)
+        last30DaysIncompleteRequestCount: Int? = nil,
+        historyScanIsPartial: Bool? = nil)
     {
+        self.historyScanIsPartial = historyScanIsPartial == true ? true : nil
         self.todayUSD = todayUSD
         self.last30DaysUSD = last30DaysUSD
         self.todayIncompleteRequestCount = todayIncompleteRequestCount.flatMap { $0 > 0 ? $0 : nil }
@@ -277,6 +289,7 @@ struct DashboardCostPayload: Encodable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case historyScanIsPartial
         case todayIncompleteRequestCount
         case last30DaysIncompleteRequestCount
         case todayUSD
@@ -285,6 +298,7 @@ struct DashboardCostPayload: Encodable {
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(self.historyScanIsPartial, forKey: .historyScanIsPartial)
         try container.encodeIfPresent(self.todayIncompleteRequestCount, forKey: .todayIncompleteRequestCount)
         try container.encodeIfPresent(self.last30DaysIncompleteRequestCount, forKey: .last30DaysIncompleteRequestCount)
         try container.encode(self.todayUSD, forKey: .todayUSD)

@@ -1,11 +1,4 @@
 import Foundation
-#if canImport(Darwin)
-import Darwin
-#elseif canImport(Glibc)
-import Glibc
-#elseif canImport(Musl)
-import Musl
-#endif
 
 /// Per-file scan cache for Muse session logs.
 ///
@@ -78,33 +71,22 @@ struct MuseLocalUsageCache: Codable {
         let changedNanoseconds: Int64
 
         static func read(at url: URL) -> Self? {
-            var info = stat()
-            guard url.path.withCString({ fstatat(AT_FDCWD, $0, &info, AT_SYMLINK_NOFOLLOW) }) == 0 else { return nil }
-            return Self.make(info)
+            UsageFileMetadata.read(at: url, followingSymlinks: false).flatMap(self.make)
         }
 
-        static func read(descriptor: Int32) -> Self? {
-            var info = stat()
-            guard fstat(descriptor, &info) == 0 else { return nil }
-            return Self.make(info)
+        static func read(from handle: FileHandle) -> Self? {
+            UsageFileMetadata.read(from: handle).flatMap(self.make)
         }
 
-        private static func make(_ info: stat) -> Self? {
-            guard info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), info.st_size >= 0 else { return nil }
-            #if os(Linux)
-            let modified = info.st_mtim
-            let changed = info.st_ctim
-            #else
-            let modified = info.st_mtimespec
-            let changed = info.st_ctimespec
-            #endif
+        private static func make(_ info: UsageFileMetadata) -> Self? {
+            guard info.isRegularFile, info.size >= 0 else { return nil }
             return Self(
-                identity: "\(info.st_dev):\(info.st_ino)",
-                size: Int64(info.st_size),
-                modifiedSeconds: Int64(modified.tv_sec),
-                modifiedNanoseconds: Int64(modified.tv_nsec),
-                changedSeconds: Int64(changed.tv_sec),
-                changedNanoseconds: Int64(changed.tv_nsec))
+                identity: info.fileID,
+                size: info.size,
+                modifiedSeconds: info.modifiedSeconds,
+                modifiedNanoseconds: info.modifiedNanoseconds,
+                changedSeconds: info.changedSeconds,
+                changedNanoseconds: info.changedNanoseconds)
         }
     }
 

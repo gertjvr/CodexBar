@@ -1,4 +1,3 @@
-import CoreFoundation
 import Foundation
 
 private final class PiSessionISO8601FormatterBox: @unchecked Sendable {
@@ -1143,8 +1142,8 @@ enum PiSessionCostScanner {
         let raw: Double
         switch value {
         case let number as NSNumber:
-            // JSON booleans bridge to NSNumber on Darwin; they are not timestamps.
-            guard CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+            // JSON booleans bridge to NSNumber; they are not timestamps.
+            guard !JSONNumber.isBoolean(number) else { return nil }
             raw = number.doubleValue
         case let string as String:
             guard let numeric = Double(string) else { return self.parseISO(string) }
@@ -1298,7 +1297,7 @@ enum PiSessionCostScanner {
         guard let value else { return 0 }
         let text: String
         if let number = value as? NSNumber {
-            guard CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+            guard !JSONNumber.isBoolean(number) else { return nil }
             text = number.stringValue
         } else if let string = value as? String {
             text = string

@@ -1,3 +1,4 @@
+#if !os(Windows)
 #if canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)
@@ -84,3 +85,4 @@ struct ProcessOwnershipReaper: Sendable {
         send(identity.pid, signal)
     }
 }
+#endif

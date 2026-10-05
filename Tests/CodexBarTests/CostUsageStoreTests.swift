@@ -955,6 +955,7 @@ extension CostUsageStoreTests {
 
 extension CostUsageStoreTests {
     @Test(arguments: [
+        "47443f6ee10929b9", // Shipped Windows CLI, with identical v3 tables and legacy row/checkpoint JSON.
         "029fe80aa98f27e8", // Before the shared JSON fallback.
         "c61aebb9cf043a72", // Previous request-ledger revision.
         "4a4c4ef34ce6f037", // Before request-ledger accounting.
@@ -1001,6 +1002,7 @@ extension CostUsageStoreTests {
         let fixture = try StoreFixture()
         defer { fixture.remove() }
         #expect(CostUsageStore.compatiblePredecessorParserHashes == [
+            "47443f6ee10929b9",
             "029fe80aa98f27e8",
             "c61aebb9cf043a72",
             "4a4c4ef34ce6f037",

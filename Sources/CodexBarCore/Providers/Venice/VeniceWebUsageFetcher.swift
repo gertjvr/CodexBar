@@ -2,9 +2,6 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
-#if canImport(CoreFoundation)
-import CoreFoundation
-#endif
 
 public enum VeniceWebUsageFetcher {
     public static let sessionURL = URL(string: "https://outerface.venice.ai/api/user/session")!
@@ -199,9 +196,7 @@ public enum VeniceWebUsageFetcher {
 
     private static func finiteNumber(_ value: Any?) -> Double? {
         if let number = value as? NSNumber {
-            #if canImport(CoreFoundation)
-            guard CFGetTypeID(number as CFTypeRef) != CFBooleanGetTypeID() else { return nil }
-            #endif
+            guard !JSONNumber.isBoolean(number) else { return nil }
             let double = number.doubleValue
             return double.isFinite ? double : nil
         }

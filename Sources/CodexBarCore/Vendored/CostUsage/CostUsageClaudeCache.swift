@@ -12,19 +12,12 @@ struct CostUsageClaudeFileStamp: Equatable, Sendable, Codable {
     }
 
     static func read(at url: URL) -> Self? {
-        var info = stat()
-        guard url.path.withCString({ fstatat(AT_FDCWD, $0, &info, 0) }) == 0 else { return nil }
-        guard info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else { return nil }
-        #if os(Linux)
-        let modifiedTime = info.st_mtim
-        #else
-        let modifiedTime = info.st_mtimespec
-        #endif
+        guard let info = UsageFileMetadata.read(at: url), info.isRegularFile else { return nil }
         return Self(
-            fileID: "\(info.st_dev):\(info.st_ino)",
-            size: Int64(info.st_size),
-            modifiedSeconds: Int64(modifiedTime.tv_sec),
-            modifiedNanoseconds: Int64(modifiedTime.tv_nsec))
+            fileID: info.fileID,
+            size: info.size,
+            modifiedSeconds: info.modifiedSeconds,
+            modifiedNanoseconds: info.modifiedNanoseconds)
     }
 }
 
@@ -568,31 +561,57 @@ enum CostUsageClaudeCacheIO {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let temporaryURL = directory.appendingPathComponent(".claude-cache-\(UUID().uuidString).tmp")
         defer { try? FileManager.default.removeItem(at: temporaryURL) }
+        #if os(Windows)
+        guard (try? WindowsPrivateFile.write(Data(), to: temporaryURL)) != nil,
+              let output = try? FileHandle(forWritingTo: temporaryURL) else { return nil }
+        var outputOpen = true
+        defer { if outputOpen { try? output.close() } }
+        #else
         guard let output = fopen(temporaryURL.path, "wb") else { return nil }
         defer { fclose(output) }
+        #endif
         var hasher = SHA256()
         func append(_ data: Data?) throws {
             guard let data else {
+                #if os(Windows)
+                try output.seek(toOffset: 0)
+                try output.truncate(atOffset: 0)
+                #else
                 rewind(output)
                 guard ftruncate(fileno(output), 0) == 0 else { throw CocoaError(.fileWriteUnknown) }
+                #endif
                 hasher = SHA256()
                 return
             }
+            #if os(Windows)
+            try output.write(contentsOf: data)
+            #else
             guard data.withUnsafeBytes({ fwrite($0.baseAddress, 1, $0.count, output) }) == data.count else {
                 throw CocoaError(.fileWriteUnknown)
             }
+            #endif
             hasher.update(data: data)
         }
         func commit() throws -> CostUsageClaudeFileStamp? {
             try checkCancellation?()
+            #if os(Windows)
+            try output.synchronize()
+            try output.close()
+            outputOpen = false
+            #else
             guard fflush(output) == 0 else { return nil }
+            #endif
             let digest = hasher.finalize()
             if let identity, identity.digest == digest, CostUsageClaudeFileStamp.read(at: url) == identity.stamp {
                 ArtifactMemo.shared.remember(at: key, stamp: identity.stamp, digest: digest, contentID: contentID)
                 return identity.stamp
             }
-            guard let stamp = CostUsageClaudeFileStamp.read(at: temporaryURL),
-                  rename(temporaryURL.path, url.path) == 0 else { return nil }
+            guard let stamp = CostUsageClaudeFileStamp.read(at: temporaryURL) else { return nil }
+            #if os(Windows)
+            guard (try? WindowsPrivateFile.publish(temporaryURL, to: url)) != nil else { return nil }
+            #else
+            guard rename(temporaryURL.path, url.path) == 0 else { return nil }
+            #endif
             ArtifactMemo.shared.remember(at: key, stamp: stamp, digest: digest, contentID: contentID)
             #if DEBUG
             CostUsageScanner.recordClaudeScanWork(.artifactWrite)

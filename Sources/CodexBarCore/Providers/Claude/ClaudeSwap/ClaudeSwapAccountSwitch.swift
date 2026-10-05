@@ -1,4 +1,3 @@
-import CoreFoundation
 import Foundation
 
 /// Allow-listed result of `cswap --switch-to <slot> --json` (schema v1).
@@ -108,7 +107,7 @@ public enum ClaudeSwapSwitchParser {
 
     private static func integer(_ raw: Any?) -> Int? {
         guard let number = raw as? NSNumber,
-              CFGetTypeID(number) != CFBooleanGetTypeID()
+              !JSONNumber.isBoolean(number)
         else {
             return nil
         }

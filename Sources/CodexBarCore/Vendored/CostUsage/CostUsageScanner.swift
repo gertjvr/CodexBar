@@ -3,7 +3,6 @@ import CryptoKit
 #else
 import Crypto
 #endif
-import CoreFoundation
 import Dispatch
 import Foundation
 #if canImport(Darwin)
@@ -392,6 +391,53 @@ enum CostUsageScanner {
         let metadata: CodexSessionMetadata
         let inheritedTotals: CostUsageCodexTotals?
         let remainingInheritedTotals: CostUsageCodexTotals?
+    }
+
+    /// Synchronous parser callbacks share one reference instead of capturing mutable local vars.
+    /// Captured optional state can otherwise produce invalid boxed borrows in optimized Windows builds.
+    private final class CodexParseState {
+        var currentModel: String?
+        var previousTotals: CostUsageCodexTotals?
+        var sessionId: String?
+        var forkedFromId: String?
+        var historyBaseThreadId: String?
+        var projectPath: String?
+        var isSubagentThread = false
+        var didCaptureLeafMetadata = false
+        var forkTimestamp: String?
+        var subagentHistoryStartOrdinal: Int?
+        var subagentCounterSemantics: CodexSubagentCounterSemantics?
+        var usesLocalSubagentBoundary = false
+        var candidateBoundaryDependsOnParentTotals = false
+        var parentConfirmedLocalBoundary = false
+        var suppressUnownedCopiedPrefix = false
+        var codexSession = CostUsageCodexSessionMetadata(
+            sessionId: nil,
+            forkedFromId: nil,
+            cwd: nil,
+            title: nil,
+            startedAtUnixMs: nil,
+            latestActivityUnixMs: nil)
+        var inheritedTotals: CostUsageCodexTotals?
+        var remainingInheritedTotals: CostUsageCodexTotals?
+        var forkBaselineResolved = false
+        var hasUnresolvedForkBaseline = false
+        var currentTurnID: String?
+        var codexUsageRowIndex = 0
+        var rawTotalsBaseline: CostUsageCodexTotals?
+        var sawDivergentTotals = false
+        var tracker = CodexTotalsTracker(watermark: nil, seenRawTotals: [], sawInterleavedTotals: false)
+        var deferredError: Error?
+        var days: [String: [String: [Int]]] = [:]
+        var rows: [CodexUsageRow] = []
+        var rowSourceEndOffsets: [Int: Int64] = [:]
+        var tokenSnapshots: [CostUsageCodexTokenSnapshot] = []
+        var lastAcceptedTokenTimestamp: String?
+        var requestLedger = CodexRequestLedgerState()
+        var replacedLegacyRowIndices: Set<Int> = []
+        var pendingSubagentLines: [CodexBufferedFastLine]?
+        var bufferedUnresolvedForkLines: [CodexBufferedFastLine]?
+        var physicalLineIndex = 0
     }
 
     struct CodexPricingEvidence: Codable, Equatable {
@@ -2609,23 +2655,13 @@ enum CostUsageScanner {
         }
     }
 
-    #if os(Linux)
-    private typealias CodexDirectoryHandle = OpaquePointer
-    #else
-    private typealias CodexDirectoryHandle = UnsafeMutablePointer<DIR>
-    #endif
-
     private final class CodexDirectoryCursor: @unchecked Sendable {
-        let directory: CodexDirectoryHandle
+        let directory: UsageDirectoryCursor
         var logicalOffset: Int64
 
-        init(directory: CodexDirectoryHandle, logicalOffset: Int64 = 0) {
+        init(directory: UsageDirectoryCursor, logicalOffset: Int64 = 0) {
             self.directory = directory
             self.logicalOffset = logicalOffset
-        }
-
-        deinit {
-            closedir(self.directory)
         }
     }
 
@@ -2649,7 +2685,7 @@ enum CostUsageScanner {
                 self.cursors.removeValue(forKey: path)
             }
             if self.cursors[path] == nil {
-                guard let directory = opendir(path) else {
+                guard let directory = UsageDirectoryCursor(directoryURL: directoryURL) else {
                     return CodexDirectoryPage(files: [], nextOffset: nil, visits: 0)
                 }
                 self.cursors[path] = CodexDirectoryCursor(directory: directory)
@@ -2661,12 +2697,9 @@ enum CostUsageScanner {
             var files: [URL] = []
             var visits = 0
             while visits < visitLimit {
-                guard let entry = readdir(cursor.directory) else {
+                guard let name = cursor.directory.nextName() else {
                     self.cursors.removeValue(forKey: path)
                     return CodexDirectoryPage(files: files, nextOffset: nil, visits: visits)
-                }
-                let name = withUnsafePointer(to: entry.pointee.d_name) { pointer in
-                    pointer.withMemoryRebound(to: CChar.self, capacity: 1024) { String(cString: $0) }
                 }
                 guard name != ".", name != ".." else { continue }
                 cursor.logicalOffset += 1
@@ -3784,7 +3817,7 @@ enum CostUsageScanner {
         func integer(_ key: String, defaultValue: Int? = nil) -> Int? {
             guard let value = usage[key] else { return defaultValue }
             guard let number = value as? NSNumber,
-                  CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  !JSONNumber.isBoolean(number),
                   number.doubleValue.isFinite, number.doubleValue >= 0,
                   number.doubleValue < Double(Int.max),
                   number.doubleValue.rounded(.towardZero) == number.doubleValue
@@ -4049,49 +4082,34 @@ enum CostUsageScanner {
         inheritedTotalsResolver: ((String, String) throws -> CodexForkBaseline)? = nil,
         checkCancellation: CancellationCheck? = nil) throws -> CodexParseResult
     {
-        var currentModel = initialModel
-        var previousTotals = initialTotals
-        var sessionId = initialForkAccountingState?.metadata.sessionId ?? initialSessionID
-        var forkedFromId = initialForkAccountingState?.metadata.forkedFromId
-        var historyBaseThreadId = initialForkAccountingState?.metadata.historyBaseThreadId
-        var projectPath = initialForkAccountingState?.metadata.projectPath
-        var isSubagentThread = false
-        var didCaptureLeafMetadata = sessionId != nil
-        var forkTimestamp = initialForkAccountingState?.metadata.forkTimestamp
-        var subagentHistoryStartOrdinal: Int?
-        var subagentCounterSemantics: CodexSubagentCounterSemantics?
-        var usesLocalSubagentBoundary = false
-        var candidateBoundaryDependsOnParentTotals = false
-        var parentConfirmedLocalBoundary = false
-        var suppressUnownedCopiedPrefix = false
-        var codexSession = CostUsageCodexSessionMetadata(
-            sessionId: sessionId,
-            forkedFromId: forkedFromId,
-            cwd: projectPath,
+        let parseState = CodexParseState()
+        parseState.currentModel = initialModel
+        parseState.previousTotals = initialTotals
+        parseState.sessionId = initialForkAccountingState?.metadata.sessionId ?? initialSessionID
+        parseState.forkedFromId = initialForkAccountingState?.metadata.forkedFromId
+        parseState.historyBaseThreadId = initialForkAccountingState?.metadata.historyBaseThreadId
+        parseState.projectPath = initialForkAccountingState?.metadata.projectPath
+        parseState.didCaptureLeafMetadata = parseState.sessionId != nil
+        parseState.forkTimestamp = initialForkAccountingState?.metadata.forkTimestamp
+        parseState.codexSession = CostUsageCodexSessionMetadata(
+            sessionId: parseState.sessionId,
+            forkedFromId: parseState.forkedFromId,
+            cwd: parseState.projectPath,
             title: nil,
             startedAtUnixMs: nil,
             latestActivityUnixMs: nil)
-        var inheritedTotals = initialForkAccountingState?.inheritedTotals
-        var remainingInheritedTotals = initialForkAccountingState?.remainingInheritedTotals
-        var forkBaselineResolved = initialForkAccountingState != nil
-        var hasUnresolvedForkBaseline = false
-        var currentTurnID = initialCodexTurnID
-        var codexUsageRowIndex = initialCodexUsageRowIndex
-        var rawTotalsBaseline = initialRawTotalsBaseline ?? initialTotals
-        var sawDivergentTotals = initialHasDivergentTotals
-        var tracker = CodexTotalsTracker(
+        parseState.inheritedTotals = initialForkAccountingState?.inheritedTotals
+        parseState.remainingInheritedTotals = initialForkAccountingState?.remainingInheritedTotals
+        parseState.forkBaselineResolved = initialForkAccountingState != nil
+        parseState.currentTurnID = initialCodexTurnID
+        parseState.codexUsageRowIndex = initialCodexUsageRowIndex
+        parseState.rawTotalsBaseline = initialRawTotalsBaseline ?? initialTotals
+        parseState.sawDivergentTotals = initialHasDivergentTotals
+        parseState.tracker = CodexTotalsTracker(
             watermark: initialRawTotalsWatermark ?? initialRawTotalsBaseline ?? initialTotals,
             seenRawTotals: initialSeenRawTotals,
             sawInterleavedTotals: initialHasInterleavedTotals)
-        var deferredError: Error?
-
-        var days: [String: [String: [Int]]] = [:]
-        var rows: [CodexUsageRow] = []
-        var rowSourceEndOffsets: [Int: Int64] = [:]
-        var tokenSnapshots: [CostUsageCodexTokenSnapshot] = []
-        var lastAcceptedTokenTimestamp: String?
-        var requestLedger = initialRequestLedgerState ?? CodexRequestLedgerState()
-        var replacedLegacyRowIndices: Set<Int> = []
+        parseState.requestLedger = initialRequestLedgerState ?? CodexRequestLedgerState()
         let retainedRows = Dictionary(initialRequestLedgerRows.compactMap { row in
             row.eventIndex.map { ($0, row) }
         }, uniquingKeysWith: { first, _ in first })
@@ -4137,20 +4155,21 @@ enum CostUsageScanner {
             guard let usage else { return nil }
             let snapshot = mirrorKey(turnID: turnID, usage: usage, total: total, timestamp: timestamp)
             let adjacent = adjacentMirrorKeys(turnID: turnID, usage: usage, total: total, timestamp: timestamp)
-            requestLedger.beginLegacyObservation(keys: adjacent, snapshot: snapshot)
+            parseState.requestLedger.beginLegacyObservation(keys: adjacent, snapshot: snapshot)
             return (snapshot, adjacent)
         }
 
         func handleRequestLedger(_ record: CodexRequestUsageRecord, endOffset: Int64?) {
-            guard !suppressUnownedCopiedPrefix, record.threadID == sessionId,
-                  record.sessionID == nil || record.sessionID == (requestLedger.sessionID ?? sessionId),
-                  let day = Self.dayKeyFromTimestamp(record.timestamp, calendar: range.calendar)
-                  ?? Self.dayKeyFromParsedISO(record.timestamp, calendar: range.calendar)
+            guard !parseState.suppressUnownedCopiedPrefix, record.threadID == parseState.sessionId,
+                  record.sessionID == nil || record
+                      .sessionID == (parseState.requestLedger.sessionID ?? parseState.sessionId),
+                      let day = Self.dayKeyFromTimestamp(record.timestamp, calendar: range.calendar)
+                      ?? Self.dayKeyFromParsedISO(record.timestamp, calendar: range.calendar)
             else { return }
             let usage = record.usage
             let responseID = record.responseID
             let timestamp = record.timestamp
-            let turnID = record.turnID ?? currentTurnID ?? requestLedger.activeTurnID
+            let turnID = record.turnID ?? parseState.currentTurnID ?? parseState.requestLedger.activeTurnID
             var keys = [
                 mirrorKey(turnID: turnID, usage: usage, total: record.threadTotal, timestamp: timestamp),
                 mirrorKey(turnID: turnID, usage: usage, total: nil, timestamp: timestamp),
@@ -4160,24 +4179,24 @@ enum CostUsageScanner {
             }
             // Identity, rather than cumulative counters, proves that a reset is a new request.
             // Copied parent records fail the ownership check above even if the parent is unavailable.
-            let isReplay = requestLedger.responseIDs.contains(responseID)
-            let mirror = keys.first(where: { requestLedger.legacyRowIndices[$0] != nil })
+            let isReplay = parseState.requestLedger.responseIDs.contains(responseID)
+            let mirror = keys.first(where: { parseState.requestLedger.legacyRowIndices[$0] != nil })
             let adjacentKeys = adjacentMirrorKeys(
                 turnID: turnID, usage: usage, total: record.threadTotal, timestamp: timestamp)
-            let adjacentIndex = requestLedger.pendingLegacyMirrors?.isDisjoint(with: adjacentKeys) == false
-                ? requestLedger.pendingLegacyRowIndex : nil
-            let mirrorIndex = mirror.flatMap { requestLedger.legacyRowIndices[$0] } ?? adjacentIndex
-            requestLedger.pendingLegacyMirrors = nil
-            requestLedger.pendingLegacyRowIndex = nil
-            requestLedger.pendingLedgerMirrors = mirrorIndex == nil ? adjacentKeys : nil
-            requestLedger.pendingLedgerResponseID = mirrorIndex == nil ? responseID : nil
+            let adjacentIndex = parseState.requestLedger.pendingLegacyMirrors?.isDisjoint(with: adjacentKeys) == false
+                ? parseState.requestLedger.pendingLegacyRowIndex : nil
+            let mirrorIndex = mirror.flatMap { parseState.requestLedger.legacyRowIndices[$0] } ?? adjacentIndex
+            parseState.requestLedger.pendingLegacyMirrors = nil
+            parseState.requestLedger.pendingLegacyRowIndex = nil
+            parseState.requestLedger.pendingLedgerMirrors = mirrorIndex == nil ? adjacentKeys : nil
+            parseState.requestLedger.pendingLedgerResponseID = mirrorIndex == nil ? responseID : nil
             let legacyRow = mirrorIndex.flatMap { index in
-                rows.first(where: { $0.eventIndex == index }) ?? retainedRows[index]
+                parseState.rows.first(where: { $0.eventIndex == index }) ?? retainedRows[index]
             }
             if let legacyRow {
                 keys.append(contentsOf: legacyRow.requestMirrorKeys ?? [])
             }
-            let base = requestLedger.countedUsage ?? .init(input: 0, cached: 0, output: 0)
+            let base = parseState.requestLedger.countedUsage ?? .init(input: 0, cached: 0, output: 0)
             if !isReplay {
                 guard !base.input.addingReportingOverflow(usage.input).overflow,
                       !base.cached.addingReportingOverflow(usage.cached).overflow,
@@ -4186,30 +4205,31 @@ enum CostUsageScanner {
                           Self.codexAddTotals(base, usage).output).overflow
                 else { return }
             }
-            requestLedger.rememberMirrors(keys, responseID: responseID)
-            requestLedger.responseIDs.insert(responseID)
+            parseState.requestLedger.rememberMirrors(keys, responseID: responseID)
+            parseState.requestLedger.responseIDs.insert(responseID)
 
             if let index = mirrorIndex, let legacy = legacyRow {
-                requestLedger.legacyRowIndices = requestLedger.legacyRowIndices.filter { $0.value != index }
-                replacedLegacyRowIndices.insert(index)
-                if rows.contains(where: { $0.eventIndex == index }) {
+                parseState.requestLedger.legacyRowIndices = parseState.requestLedger.legacyRowIndices
+                    .filter { $0.value != index }
+                parseState.replacedLegacyRowIndices.insert(index)
+                if parseState.rows.contains(where: { $0.eventIndex == index }) {
                     add(
                         dayKey: legacy.day,
                         model: legacy.model,
                         input: -legacy.input,
                         cached: -legacy.cached,
                         output: -legacy.output)
-                    rows.removeAll { $0.eventIndex == index }
-                    rowSourceEndOffsets.removeValue(forKey: index)
+                    parseState.rows.removeAll { $0.eventIndex == index }
+                    parseState.rowSourceEndOffsets.removeValue(forKey: index)
                 }
             }
             guard !isReplay else { return }
             let model = record.model
-                ?? turnID.flatMap { requestLedger.turnModels[$0] }
-                ?? (turnID == currentTurnID || turnID == requestLedger.activeTurnID
-                    ? Self.codexModelEvidence(currentModel) : nil)
+                ?? turnID.flatMap { parseState.requestLedger.turnModels[$0] }
+                ?? (turnID == parseState.currentTurnID || turnID == parseState.requestLedger.activeTurnID
+                    ? Self.codexModelEvidence(parseState.currentModel) : nil)
                 ?? CostUsagePricing.codexUnattributedModel
-            requestLedger.countedUsage = Self.codexAddTotals(base, usage)
+            parseState.requestLedger.countedUsage = Self.codexAddTotals(base, usage)
             appendUsage(
                 usage,
                 day: day,
@@ -4221,7 +4241,7 @@ enum CostUsageScanner {
                 retainedPricing: legacyRow,
                 endOffset: endOffset)
             observeTimestamp(timestamp)
-            lastAcceptedTokenTimestamp = timestamp
+            parseState.lastAcceptedTokenTimestamp = timestamp
         }
 
         func add(dayKey: String, model: String, input: Int, cached: Int, output: Int) {
@@ -4229,13 +4249,13 @@ enum CostUsageScanner {
             else { return }
             let normModel = CostUsagePricing.normalizeCodexModel(model)
 
-            var dayModels = days[dayKey] ?? [:]
+            var dayModels = parseState.days[dayKey] ?? [:]
             var packed = dayModels[normModel] ?? [0, 0, 0]
             packed[0] = (packed[safe: 0] ?? 0) + input
             packed[1] = (packed[safe: 1] ?? 0) + cached
             packed[2] = (packed[safe: 2] ?? 0) + output
             dayModels[normModel] = packed
-            days[dayKey] = dayModels
+            parseState.days[dayKey] = dayModels
         }
 
         @discardableResult
@@ -4250,15 +4270,15 @@ enum CostUsageScanner {
             retainedPricing: CodexUsageRow? = nil,
             endOffset: Int64? = nil) -> Int
         {
-            let index = codexUsageRowIndex
-            codexUsageRowIndex += 1
+            let index = parseState.codexUsageRowIndex
+            parseState.codexUsageRowIndex += 1
             let normalizedModel = CostUsagePricing.normalizeCodexModel(model)
             add(dayKey: day, model: normalizedModel, input: usage.input, cached: usage.cached, output: usage.output)
             guard CostUsageDayRange.isInRange(dayKey: day, since: range.scanSinceKey, until: range.scanUntilKey)
             else { return index }
             // A typed mirror changes request identity, not the matching row's saved billing evidence.
             let pricing = retainedPricing.flatMap { $0.model == normalizedModel ? $0 : nil }
-            rows.append(CodexUsageRow(
+            parseState.rows.append(CodexUsageRow(
                 day: day,
                 model: normalizedModel,
                 rawModel: model,
@@ -4275,7 +4295,7 @@ enum CostUsageScanner {
                 pricingMode: pricing?.pricingMode,
                 responseID: responseID,
                 requestMirrorKeys: mirrorKeys))
-            rowSourceEndOffsets[index] = endOffset
+            parseState.rowSourceEndOffsets[index] = endOffset
             return index
         }
 
@@ -4296,34 +4316,34 @@ enum CostUsageScanner {
             timestamp: String?,
             sourceEndOffset: Int64)
         {
-            let resolvedTimestamp = timestamp ?? lastAcceptedTokenTimestamp
+            let resolvedTimestamp = timestamp ?? parseState.lastAcceptedTokenTimestamp
             guard let dayKey = resolvedTimestamp.flatMap({
                 Self.dayKeyFromTimestamp($0) ?? Self.dayKeyFromParsedISO($0)
             }) else { return }
 
             observeTimestamp(resolvedTimestamp)
             let model = Self.codexModelEvidence(modelEvidence)
-                ?? Self.codexModelEvidence(currentModel)
+                ?? Self.codexModelEvidence(parseState.currentModel)
                 ?? CostUsagePricing.codexUnattributedModel
             appendUsage(
                 totals,
                 day: dayKey,
                 model: model,
                 timestamp: resolvedTimestamp,
-                turnID: currentTurnID,
+                turnID: parseState.currentTurnID,
                 endOffset: sourceEndOffset)
             if let resolvedTimestamp {
-                lastAcceptedTokenTimestamp = resolvedTimestamp
+                parseState.lastAcceptedTokenTimestamp = resolvedTimestamp
             }
         }
 
         func observeTimestamp(_ timestamp: String?) {
             guard let unixMs = unixMilliseconds(from: timestamp) else { return }
-            codexSession.startedAtUnixMs = switch codexSession.startedAtUnixMs {
+            parseState.codexSession.startedAtUnixMs = switch parseState.codexSession.startedAtUnixMs {
             case let current?: min(current, unixMs)
             case nil: unixMs
             }
-            codexSession.latestActivityUnixMs = switch codexSession.latestActivityUnixMs {
+            parseState.codexSession.latestActivityUnixMs = switch parseState.codexSession.latestActivityUnixMs {
             case let current?: max(current, unixMs)
             case nil: unixMs
             }
@@ -4331,38 +4351,38 @@ enum CostUsageScanner {
 
         func observeCwd(_ value: String?) {
             guard let value = Self.codexModelEvidence(value) else { return }
-            codexSession.cwd = value
+            parseState.codexSession.cwd = value
         }
 
         func resolveForkBaseline(parentSessionId: String, forkedAt: String) throws {
-            guard !forkBaselineResolved else { return }
+            guard !parseState.forkBaselineResolved else { return }
             guard let inheritedTotalsResolver else { return }
-            forkBaselineResolved = true
+            parseState.forkBaselineResolved = true
             switch try inheritedTotalsResolver(parentSessionId, forkedAt) {
             case let .resolved(totals):
-                inheritedTotals = totals
-                remainingInheritedTotals = totals
-                hasUnresolvedForkBaseline = false
+                parseState.inheritedTotals = totals
+                parseState.remainingInheritedTotals = totals
+                parseState.hasUnresolvedForkBaseline = false
             case .unresolved:
-                hasUnresolvedForkBaseline = true
+                parseState.hasUnresolvedForkBaseline = true
             }
         }
 
         func configureForkAccountingIfReady() throws {
-            guard let forkedFromId else { return }
-            if isSubagentThread, subagentCounterSemantics == nil {
+            guard let resolvedForkedFromId = parseState.forkedFromId else { return }
+            if parseState.isSubagentThread, parseState.subagentCounterSemantics == nil {
                 return
             }
-            if subagentCounterSemantics == .independent || usesLocalSubagentBoundary {
-                forkBaselineResolved = true
-                inheritedTotals = nil
-                remainingInheritedTotals = nil
-                hasUnresolvedForkBaseline = false
+            if parseState.subagentCounterSemantics == .independent || parseState.usesLocalSubagentBoundary {
+                parseState.forkBaselineResolved = true
+                parseState.inheritedTotals = nil
+                parseState.remainingInheritedTotals = nil
+                parseState.hasUnresolvedForkBaseline = false
                 return
             }
             try resolveForkBaseline(
-                parentSessionId: forkedFromId,
-                forkedAt: forkTimestamp ?? "")
+                parentSessionId: resolvedForkedFromId,
+                forkedAt: parseState.forkTimestamp ?? "")
         }
 
         /// Codex Desktop paginated rollouts keep the original `forked_from_id` while continuing the
@@ -4374,9 +4394,11 @@ enum CostUsageScanner {
             total: CostUsageCodexTotals,
             last: CostUsageCodexTotals)
         {
-            guard previousTotals == nil, let currentInherited = inheritedTotals else { return }
-            guard let historyBaseThreadId,
-                  !CodexSubagentRolloutShape.sameConcreteSessionID(historyBaseThreadId, forkedFromId)
+            guard parseState.previousTotals == nil, let currentInherited = parseState.inheritedTotals else { return }
+            guard let continuedHistoryBaseThreadId = parseState.historyBaseThreadId,
+                  !CodexSubagentRolloutShape.sameConcreteSessionID(
+                      continuedHistoryBaseThreadId,
+                      parseState.forkedFromId)
             else { return }
             guard Self.codexTotalsAtLeast(total, last) else { return }
             let localInherited = Self.codexTotalDelta(from: last, to: total)
@@ -4389,61 +4411,62 @@ enum CostUsageScanner {
             self.log.debug(
                 "Codex cost usage raised inherited fork baseline from first total-last",
                 metadata: [
-                    "sessionId": sessionId ?? "unknown",
-                    "forkedFromId": forkedFromId ?? "unknown",
-                    "historyBaseThreadId": historyBaseThreadId,
+                    "sessionId": parseState.sessionId ?? "unknown",
+                    "forkedFromId": parseState.forkedFromId ?? "unknown",
+                    "historyBaseThreadId": continuedHistoryBaseThreadId,
                     "ancestorInput": String(currentInherited.input),
                     "localInput": String(localInherited.input),
                 ])
-            inheritedTotals = localInherited
-            remainingInheritedTotals = localInherited
+            parseState.inheritedTotals = localInherited
+            parseState.remainingInheritedTotals = localInherited
         }
 
         func handleSessionMetadata(_ metadata: CodexSessionMetadata) throws {
             // The first parsed session_meta is the authoritative leaf. Copied prefixes can
             // contain many embedded ancestor metas; they are shape evidence, never new identity.
-            if didCaptureLeafMetadata {
+            if parseState.didCaptureLeafMetadata {
                 // A same-leaf restart may add metadata that was absent from the initial record.
                 // Enrich missing fork/project fields without allowing an ancestor to replace identity.
-                guard CodexSubagentRolloutShape.sameConcreteSessionID(metadata.sessionId, sessionId) else { return }
-                isSubagentThread = isSubagentThread || metadata.isSubagentThread
-                if requestLedger.sessionID == nil {
-                    requestLedger.sessionID = metadata.requestSessionID ?? metadata.sessionId
+                guard CodexSubagentRolloutShape.sameConcreteSessionID(metadata.sessionId, parseState.sessionId)
+                else { return }
+                parseState.isSubagentThread = parseState.isSubagentThread || metadata.isSubagentThread
+                if parseState.requestLedger.sessionID == nil {
+                    parseState.requestLedger.sessionID = metadata.requestSessionID ?? metadata.sessionId
                 }
-                if forkedFromId == nil, let enrichedParentID = metadata.forkedFromId {
-                    forkedFromId = enrichedParentID
-                    codexSession.forkedFromId = enrichedParentID
-                    forkTimestamp = metadata.forkTimestamp ?? forkTimestamp
+                if parseState.forkedFromId == nil, let enrichedParentID = metadata.forkedFromId {
+                    parseState.forkedFromId = enrichedParentID
+                    parseState.codexSession.forkedFromId = enrichedParentID
+                    parseState.forkTimestamp = metadata.forkTimestamp ?? parseState.forkTimestamp
                     try configureForkAccountingIfReady()
                 }
-                if projectPath == nil {
-                    projectPath = metadata.projectPath
+                if parseState.projectPath == nil {
+                    parseState.projectPath = metadata.projectPath
                 }
-                if subagentHistoryStartOrdinal == nil {
-                    subagentHistoryStartOrdinal = metadata.subagentHistoryStartOrdinal
+                if parseState.subagentHistoryStartOrdinal == nil {
+                    parseState.subagentHistoryStartOrdinal = metadata.subagentHistoryStartOrdinal
                 }
-                if historyBaseThreadId == nil {
-                    historyBaseThreadId = metadata.historyBaseThreadId
+                if parseState.historyBaseThreadId == nil {
+                    parseState.historyBaseThreadId = metadata.historyBaseThreadId
                 }
                 observeTimestamp(metadata.forkTimestamp)
-                if codexSession.cwd == nil {
+                if parseState.codexSession.cwd == nil {
                     observeCwd(metadata.projectPath)
                 }
                 return
             }
-            didCaptureLeafMetadata = true
-            sessionId = metadata.sessionId
-            requestLedger.sessionID = metadata.requestSessionID ?? metadata.sessionId
-            forkedFromId = metadata.forkedFromId
-            historyBaseThreadId = metadata.historyBaseThreadId
-            forkTimestamp = metadata.forkTimestamp
-            projectPath = metadata.projectPath
-            subagentHistoryStartOrdinal = metadata.subagentHistoryStartOrdinal
-            codexSession.sessionId = metadata.sessionId
-            codexSession.forkedFromId = metadata.forkedFromId
+            parseState.didCaptureLeafMetadata = true
+            parseState.sessionId = metadata.sessionId
+            parseState.requestLedger.sessionID = metadata.requestSessionID ?? metadata.sessionId
+            parseState.forkedFromId = metadata.forkedFromId
+            parseState.historyBaseThreadId = metadata.historyBaseThreadId
+            parseState.forkTimestamp = metadata.forkTimestamp
+            parseState.projectPath = metadata.projectPath
+            parseState.subagentHistoryStartOrdinal = metadata.subagentHistoryStartOrdinal
+            parseState.codexSession.sessionId = metadata.sessionId
+            parseState.codexSession.forkedFromId = metadata.forkedFromId
             observeTimestamp(metadata.forkTimestamp)
             observeCwd(metadata.projectPath)
-            isSubagentThread = metadata.isSubagentThread
+            parseState.isSubagentThread = metadata.isSubagentThread
             try configureForkAccountingIfReady()
         }
 
@@ -4453,21 +4476,21 @@ enum CostUsageScanner {
             guard let dayKey = Self.dayKeyFromTimestamp(record.timestamp, calendar: range.calendar)
                 ?? Self.dayKeyFromParsedISO(record.timestamp, calendar: range.calendar)
             else { return }
-            guard !suppressUnownedCopiedPrefix else { return }
+            guard !parseState.suppressUnownedCopiedPrefix else { return }
 
-            let model = Self.codexModelEvidence(currentModel)
+            let model = Self.codexModelEvidence(parseState.currentModel)
                 ?? Self.codexModelEvidence(record.model)
                 ?? CostUsagePricing.codexUnattributedModel
             let total = record.total
             let last = record.last
-            let mirrorTurnID = record.turnID ?? currentTurnID ?? requestLedger.activeTurnID
+            let mirrorTurnID = record.turnID ?? parseState.currentTurnID ?? parseState.requestLedger.activeTurnID
             var mirror = observeLegacyMirror(
                 usage: last, turnID: mirrorTurnID, total: total, timestamp: record.timestamp)
-            defer { requestLedger.clearPendingMirrors(when: mirror == nil) }
+            defer { parseState.requestLedger.clearPendingMirrors(when: mirror == nil) }
             // A cumulative fork counter is not attributable until either the parent snapshot or
             // a trustworthy child-owned suffix establishes the inherited baseline. Publishing
             // best-effort `last` rows here can replay billions of copied-prefix tokens.
-            guard !hasUnresolvedForkBaseline else { return }
+            guard !parseState.hasUnresolvedForkBaseline else { return }
             if let total, let last {
                 raiseInheritedBaselineIfContinuedCounter(total: total, last: last)
             }
@@ -4478,7 +4501,7 @@ enum CostUsageScanner {
             var deltaReasoning: Int?
 
             func adjustedLastDelta(_ rawDelta: CostUsageCodexTotals) -> CostUsageCodexTotals {
-                guard var remaining = remainingInheritedTotals else { return rawDelta }
+                guard var remaining = parseState.remainingInheritedTotals else { return rawDelta }
 
                 let adjusted = CostUsageCodexTotals(
                     input: max(0, rawDelta.input - remaining.input),
@@ -4490,8 +4513,8 @@ enum CostUsageScanner {
                 remaining.cached = max(0, remaining.cached - rawDelta.cached)
                 remaining.output = max(0, remaining.output - rawDelta.output)
                 remaining.reasoning = Self.codexSubtractOptional(remaining.reasoning, rawDelta.reasoning)
-                remainingInheritedTotals = if remaining.input == 0, remaining.cached == 0,
-                                              remaining.output == 0
+                parseState.remainingInheritedTotals = if remaining.input == 0, remaining.cached == 0,
+                                                         remaining.output == 0
                 {
                     nil
                 } else {
@@ -4504,7 +4527,8 @@ enum CostUsageScanner {
             // Fork totals are normalized against the selected baseline. Classified independent
             // counters and locally delimited suffixes intentionally bypass the parent baseline.
             let adjustedTotal: CostUsageCodexTotals? = total.map { rawTotals in
-                guard let inheritedTotals, !hasUnresolvedForkBaseline else { return rawTotals }
+                guard let inheritedTotals = parseState.inheritedTotals,
+                      !parseState.hasUnresolvedForkBaseline else { return rawTotals }
                 return CostUsageCodexTotals(
                     input: max(0, rawTotals.input - inheritedTotals.input),
                     cached: max(0, rawTotals.cached - inheritedTotals.cached),
@@ -4516,12 +4540,12 @@ enum CostUsageScanner {
                 // Only committed observations enter the seen set. Replacing this with a bare
                 // watermark-equality check would skip first-time fork baseline bookkeeping.
                 // Post-latch containment remains the load-bearing overcount guard.
-                if tracker.isSeen(adjustedTotal) {
+                if parseState.tracker.isSeen(adjustedTotal) {
                     return
                 }
-                let staleBaseline = tracker.watermark ?? rawTotalsBaseline
+                let staleBaseline = parseState.tracker.watermark ?? parseState.rawTotalsBaseline
                 if let previousTotal = staleBaseline,
-                   !hasUnresolvedForkBaseline,
+                   !parseState.hasUnresolvedForkBaseline,
                    Self.codexLooksLikeStaleRegression(
                        current: adjustedTotal,
                        previous: previousTotal,
@@ -4532,26 +4556,26 @@ enum CostUsageScanner {
                     // latch interleaved mode.
                     return
                 }
-                tracker.latchIfBelowWatermark(adjustedTotal)
+                parseState.tracker.latchIfBelowWatermark(adjustedTotal)
             }
-            let watermarkBaseline = tracker.watermark ?? rawTotalsBaseline
+            let watermarkBaseline = parseState.tracker.watermark ?? parseState.rawTotalsBaseline
             defer {
                 if let adjustedTotal {
-                    tracker.commitObserved(adjustedTotal)
+                    parseState.tracker.commitObserved(adjustedTotal)
                 }
             }
 
             func totalsDerivedDelta(to currentTotals: CostUsageCodexTotals) -> CostUsageCodexTotals {
-                if tracker.sawInterleavedTotals {
+                if parseState.tracker.sawInterleavedTotals {
                     return Self.codexContainedTotalDelta(
                         watermark: watermarkBaseline,
-                        counted: previousTotals,
+                        counted: parseState.previousTotals,
                         current: currentTotals)
                 }
-                if sawDivergentTotals {
+                if parseState.sawDivergentTotals {
                     return Self.codexDivergentTotalDelta(
                         rawBaseline: watermarkBaseline,
-                        countedBaseline: previousTotals,
+                        countedBaseline: parseState.previousTotals,
                         current: currentTotals)
                 }
                 return Self.codexTotalDelta(from: watermarkBaseline, to: currentTotals)
@@ -4562,53 +4586,53 @@ enum CostUsageScanner {
                 deltaCached = delta.cached
                 deltaOutput = delta.output
                 deltaReasoning = delta.reasoning
-                let prev = previousTotals ?? .init(
+                let prev = parseState.previousTotals ?? .init(
                     input: 0,
                     cached: 0,
                     output: 0,
                     reasoning: delta.reasoning == nil ? nil : 0)
-                previousTotals = Self.codexAddTotals(prev, delta)
-                rawTotalsBaseline = rawBaseline
-                if !Self.codexTotalsEqual(rawTotalsBaseline, previousTotals) {
-                    sawDivergentTotals = true
+                parseState.previousTotals = Self.codexAddTotals(prev, delta)
+                parseState.rawTotalsBaseline = rawBaseline
+                if !Self.codexTotalsEqual(parseState.rawTotalsBaseline, parseState.previousTotals) {
+                    parseState.sawDivergentTotals = true
                 }
             }
 
             if let currentTotals = adjustedTotal,
-               forkedFromId != nil,
-               !hasUnresolvedForkBaseline
+               parseState.forkedFromId != nil,
+               !parseState.hasUnresolvedForkBaseline
             {
                 // Non-interleaved forks keep totals-only accounting (#1164 / 45b68c34).
                 // After latch, use post-latch containment capped by last when present.
-                let delta: CostUsageCodexTotals = if tracker.sawInterleavedTotals {
+                let delta: CostUsageCodexTotals = if parseState.tracker.sawInterleavedTotals {
                     Self.codexPostLatchEventDelta(
                         watermark: watermarkBaseline,
-                        counted: previousTotals,
+                        counted: parseState.previousTotals,
                         current: currentTotals,
                         adjustedLast: last.map { adjustedLastDelta($0) })
                 } else {
                     totalsDerivedDelta(to: currentTotals)
                 }
                 commitDelta(delta, rawBaseline: currentTotals)
-                remainingInheritedTotals = nil
+                parseState.remainingInheritedTotals = nil
             } else if let last {
                 let rawDelta = last
-                let hadRemainingInheritedTotals = remainingInheritedTotals != nil
+                let hadRemainingInheritedTotals = parseState.remainingInheritedTotals != nil
                 var adjustedDelta = adjustedLastDelta(rawDelta)
-                let prev = previousTotals ?? .init(
+                let prev = parseState.previousTotals ?? .init(
                     input: 0,
                     cached: 0,
                     output: 0,
                     reasoning: adjustedDelta.reasoning == nil ? nil : 0)
 
-                if let currentTotals = adjustedTotal, !hasUnresolvedForkBaseline {
-                    if tracker.sawInterleavedTotals {
+                if let currentTotals = adjustedTotal, !parseState.hasUnresolvedForkBaseline {
+                    if parseState.tracker.sawInterleavedTotals {
                         adjustedDelta = Self.codexPostLatchEventDelta(
                             watermark: watermarkBaseline,
-                            counted: previousTotals,
+                            counted: parseState.previousTotals,
                             current: currentTotals,
                             adjustedLast: adjustedDelta)
-                        remainingInheritedTotals = nil
+                        parseState.remainingInheritedTotals = nil
                     } else {
                         let totalDelta = Self.codexTotalDelta(from: watermarkBaseline, to: currentTotals)
                         if !hadRemainingInheritedTotals,
@@ -4617,10 +4641,10 @@ enum CostUsageScanner {
                                currentTotal: currentTotals,
                                totalDelta: totalDelta,
                                lastDelta: rawDelta,
-                               sawDivergentTotals: sawDivergentTotals)
+                               sawDivergentTotals: parseState.sawDivergentTotals)
                         {
                             adjustedDelta = totalDelta
-                            remainingInheritedTotals = nil
+                            parseState.remainingInheritedTotals = nil
                         }
                     }
                     commitDelta(adjustedDelta, rawBaseline: currentTotals)
@@ -4630,13 +4654,13 @@ enum CostUsageScanner {
                     deltaCached = adjustedDelta.cached
                     deltaOutput = adjustedDelta.output
                     deltaReasoning = adjustedDelta.reasoning
-                    previousTotals = countedTotals
-                    rawTotalsBaseline = countedTotals
-                    tracker.raiseWatermark(to: countedTotals)
+                    parseState.previousTotals = countedTotals
+                    parseState.rawTotalsBaseline = countedTotals
+                    parseState.tracker.raiseWatermark(to: countedTotals)
                 }
             } else if let currentTotals = adjustedTotal {
                 commitDelta(totalsDerivedDelta(to: currentTotals), rawBaseline: currentTotals)
-                remainingInheritedTotals = nil
+                parseState.remainingInheritedTotals = nil
             } else {
                 return
             }
@@ -4650,7 +4674,7 @@ enum CostUsageScanner {
 
             // Observe legacy counters even when the ledger owns the row. Later legacy-only events
             // still need their original baseline and replay/containment protection.
-            if let key = mirror?.snapshot, requestLedger.mirroredResponses?[key] != nil {
+            if let key = mirror?.snapshot, parseState.requestLedger.mirroredResponses?[key] != nil {
                 return
             }
             if deltaInput == 0, deltaCached == 0, deltaOutput == 0 {
@@ -4661,12 +4685,12 @@ enum CostUsageScanner {
                 day: dayKey,
                 model: model,
                 timestamp: record.timestamp,
-                turnID: record.turnID ?? currentTurnID,
+                turnID: record.turnID ?? parseState.currentTurnID,
                 mirrorKeys: mirror.map { [$0.snapshot] },
                 endOffset: sourceEndOffset)
-            if let key = mirror?.snapshot { requestLedger.legacyRowIndices[key] = eventIndex }
-            requestLedger.pendingLegacyMirrors = mirror?.adjacent
-            requestLedger.pendingLegacyRowIndex = eventIndex
+            if let key = mirror?.snapshot { parseState.requestLedger.legacyRowIndices[key] = eventIndex }
+            parseState.requestLedger.pendingLegacyMirrors = mirror?.adjacent
+            parseState.requestLedger.pendingLegacyRowIndex = eventIndex
         }
 
         func processFastLine(_ fastLine: CodexFastLine, sourceEndOffset: Int64?) throws {
@@ -4674,25 +4698,25 @@ enum CostUsageScanner {
             case let .sessionMeta(metadata):
                 try handleSessionMetadata(metadata)
             case let .turnContext(metadata):
-                requestLedger.clearPendingMirrors()
+                parseState.requestLedger.clearPendingMirrors()
                 observeTimestamp(metadata.timestamp)
                 observeCwd(metadata.cwd)
-                if let title = Self.codexModelEvidence(metadata.title) { codexSession.title = title }
+                if let title = Self.codexModelEvidence(metadata.title) { parseState.codexSession.title = title }
                 if let turnID = metadata.turnID {
-                    requestLedger.activeTurnID = turnID
+                    parseState.requestLedger.activeTurnID = turnID
                 }
                 if let model = metadata.model {
                     // An explicitly blank context clears stale model evidence; an omitted field preserves it.
-                    currentModel = Self.codexModelEvidence(model)
+                    parseState.currentModel = Self.codexModelEvidence(model)
                 }
-                if let turnID = metadata.turnID, let model = Self.codexModelEvidence(currentModel) {
-                    requestLedger.turnModels[turnID] = model
+                if let turnID = metadata.turnID, let model = Self.codexModelEvidence(parseState.currentModel) {
+                    parseState.requestLedger.turnModels[turnID] = model
                 }
             case .interAgentCommunication:
                 break
             case let .taskStarted(turnID):
-                requestLedger.clearPendingMirrors()
-                currentTurnID = turnID
+                parseState.requestLedger.clearPendingMirrors()
+                parseState.currentTurnID = turnID
             case let .tokenCount(record):
                 try handleTokenCount(record, sourceEndOffset: sourceEndOffset)
             case let .tokenUsageRecord(record):
@@ -4703,8 +4727,8 @@ enum CostUsageScanner {
         let maxLineBytes = 256 * 1024
         let prefixBytes = maxLineBytes
 
-        var pendingSubagentLines = initialBufferedSubagentLines
-        var bufferedUnresolvedForkLines = initialBufferedUnresolvedForkLines
+        parseState.pendingSubagentLines = initialBufferedSubagentLines
+        parseState.bufferedUnresolvedForkLines = initialBufferedUnresolvedForkLines
 
         if let initialBufferedSubagentLines, startOffset > 0 {
             for buffered in initialBufferedSubagentLines {
@@ -4720,7 +4744,7 @@ enum CostUsageScanner {
             if metadata.isSubagentThread {
                 // Subagent provenance can omit a fork id. Buffer parsed events, not JSON, so
                 // classification remains one disk pass and reuses the existing totals reducer.
-                pendingSubagentLines = []
+                parseState.pendingSubagentLines = []
             }
         }
         if let initialBufferedUnresolvedForkLines, startOffset > 0 {
@@ -4728,11 +4752,11 @@ enum CostUsageScanner {
                 guard case let .sessionMeta(metadata) = buffered.line else { continue }
                 try handleSessionMetadata(metadata)
             }
-            if !hasUnresolvedForkBaseline {
+            if !parseState.hasUnresolvedForkBaseline {
                 for buffered in initialBufferedUnresolvedForkLines {
                     try processFastLine(buffered.line, sourceEndOffset: buffered.endOffset)
                 }
-                bufferedUnresolvedForkLines = nil
+                parseState.bufferedUnresolvedForkLines = nil
             }
         }
 
@@ -4748,21 +4772,21 @@ enum CostUsageScanner {
                 endOffset: endOffset,
                 line: fastLine)
             if case let .tokenCount(record) = fastLine, record.last != nil || record.total != nil {
-                tokenSnapshots.append(CostUsageCodexTokenSnapshot(
+                parseState.tokenSnapshots.append(CostUsageCodexTokenSnapshot(
                     timestamp: record.timestamp,
                     last: record.last,
                     total: record.total,
                     endOffset: endOffset))
             }
-            if pendingSubagentLines != nil {
-                pendingSubagentLines?.append(bufferedLine)
+            if parseState.pendingSubagentLines != nil {
+                parseState.pendingSubagentLines?.append(bufferedLine)
             } else {
                 try processFastLine(fastLine, sourceEndOffset: endOffset)
-                if hasUnresolvedForkBaseline {
-                    if bufferedUnresolvedForkLines == nil {
-                        bufferedUnresolvedForkLines = []
+                if parseState.hasUnresolvedForkBaseline {
+                    if parseState.bufferedUnresolvedForkLines == nil {
+                        parseState.bufferedUnresolvedForkLines = []
                     }
-                    bufferedUnresolvedForkLines?.append(bufferedLine)
+                    parseState.bufferedUnresolvedForkLines?.append(bufferedLine)
                 }
             }
         }
@@ -4773,7 +4797,7 @@ enum CostUsageScanner {
         var effectiveTargetSize = requestedTargetSize
         let bytesToTarget = max(0, requestedTargetSize - startOffset)
         let boundedBytesToRead = maxBytesToRead.map { min(max(0, $0), bytesToTarget) } ?? bytesToTarget
-        var physicalLineIndex = (initialBufferedSubagentLines?.last?.lineIndex ?? -1) + 1
+        parseState.physicalLineIndex = (initialBufferedSubagentLines?.last?.lineIndex ?? -1) + 1
         var jsonlResumeState = initialJSONLResumeState
         do {
             let scanProgress = try CostUsageJsonl.scanBounded(
@@ -4786,9 +4810,9 @@ enum CostUsageScanner {
                 shouldStop: shouldStopReading,
                 checkCancellation: checkCancellation,
                 onLine: { line in
-                    let lineIndex = physicalLineIndex
-                    physicalLineIndex += 1
-                    if deferredError != nil {
+                    let lineIndex = parseState.physicalLineIndex
+                    parseState.physicalLineIndex += 1
+                    if parseState.deferredError != nil {
                         return
                     }
                     guard !line.bytes.isEmpty else { return }
@@ -4809,10 +4833,10 @@ enum CostUsageScanner {
                                     ordinal: nil,
                                     endOffset: line.endOffset)
                             } catch {
-                                deferredError = error
+                                parseState.deferredError = error
                             }
                         }
-                        if pendingSubagentLines != nil {
+                        if parseState.pendingSubagentLines != nil {
                             let truncatedMetadata = Self.extractCodexTruncatedSessionMetadata(from: line.bytes)
                             if truncatedMetadata.isSessionMetadata {
                                 do {
@@ -4828,7 +4852,7 @@ enum CostUsageScanner {
                                         ordinal: nil,
                                         endOffset: line.endOffset)
                                 } catch {
-                                    deferredError = error
+                                    parseState.deferredError = error
                                 }
                             }
                         }
@@ -4882,7 +4906,7 @@ enum CostUsageScanner {
                                     ordinal: ordinal,
                                     endOffset: line.endOffset)
                             } catch {
-                                deferredError = error
+                                parseState.deferredError = error
                             }
                             return
                         }
@@ -4902,14 +4926,14 @@ enum CostUsageScanner {
                                 ordinal: (object["ordinal"] as? NSNumber)?.intValue,
                                 endOffset: line.endOffset)
                         } catch {
-                            deferredError = error
+                            parseState.deferredError = error
                         }
                     }
                 })
             parsedBytes = scanProgress.readOffset
             jsonlResumeState = scanProgress.resumeState
-            if let deferredError {
-                throw deferredError
+            if let scanError = parseState.deferredError {
+                throw scanError
             }
 
             // A rollout can be observed while Codex is between writes. If the captured target ends
@@ -4925,7 +4949,7 @@ enum CostUsageScanner {
             // Unlike an ordinary rollout, a subagent prefix is not independently publishable:
             // later lineage metadata can reclassify already-buffered totals as copied history.
             let hasUnconsumedPhysicalTail = effectiveTargetSize < currentFileSize
-            if let pendingSubagentLines,
+            if let pendingLines = parseState.pendingSubagentLines,
                parsedBytes >= effectiveTargetSize,
                jsonlResumeState == nil,
                !hasUnconsumedPhysicalTail
@@ -4933,27 +4957,27 @@ enum CostUsageScanner {
                 // Same-leaf metadata can fill lineage fields after the opening record. Collect it
                 // before replay so copied-prefix totals never run once on the wrong baseline, and
                 // so an owned-suffix filter cannot discard the only fork identifier.
-                for buffered in pendingSubagentLines {
+                for buffered in pendingLines {
                     guard case let .sessionMeta(metadata) = buffered.line,
-                          CodexSubagentRolloutShape.sameConcreteSessionID(metadata.sessionId, sessionId)
+                          CodexSubagentRolloutShape.sameConcreteSessionID(metadata.sessionId, parseState.sessionId)
                     else { continue }
-                    if forkedFromId == nil, let enrichedParentID = metadata.forkedFromId {
-                        forkedFromId = enrichedParentID
-                        codexSession.forkedFromId = enrichedParentID
-                        forkTimestamp = metadata.forkTimestamp ?? forkTimestamp
+                    if parseState.forkedFromId == nil, let enrichedParentID = metadata.forkedFromId {
+                        parseState.forkedFromId = enrichedParentID
+                        parseState.codexSession.forkedFromId = enrichedParentID
+                        parseState.forkTimestamp = metadata.forkTimestamp ?? parseState.forkTimestamp
                     }
-                    if projectPath == nil {
-                        projectPath = metadata.projectPath
+                    if parseState.projectPath == nil {
+                        parseState.projectPath = metadata.projectPath
                     }
-                    if subagentHistoryStartOrdinal == nil {
-                        subagentHistoryStartOrdinal = metadata.subagentHistoryStartOrdinal
+                    if parseState.subagentHistoryStartOrdinal == nil {
+                        parseState.subagentHistoryStartOrdinal = metadata.subagentHistoryStartOrdinal
                     }
                     observeTimestamp(metadata.forkTimestamp)
-                    if codexSession.cwd == nil {
+                    if parseState.codexSession.cwd == nil {
                         observeCwd(metadata.projectPath)
                     }
                 }
-                let observations = pendingSubagentLines.compactMap { buffered -> CodexSubagentRolloutShape
+                let observations = pendingLines.compactMap { buffered -> CodexSubagentRolloutShape
                     .Observation? in
                     let kind: CodexSubagentRolloutShape.Observation.Kind
                     switch buffered.line {
@@ -4974,28 +4998,28 @@ enum CostUsageScanner {
                         kind: kind)
                 }
                 let shape = CodexSubagentRolloutShape.classify(
-                    leafSessionID: sessionId,
+                    leafSessionID: parseState.sessionId,
                     observations: observations,
-                    hasExplicitParent: forkedFromId != nil)
-                subagentCounterSemantics = shape.counterSemantics
-                if forkedFromId == nil {
-                    forkedFromId = shape.inferredParentSessionID
+                    hasExplicitParent: parseState.forkedFromId != nil)
+                parseState.subagentCounterSemantics = shape.counterSemantics
+                if parseState.forkedFromId == nil {
+                    parseState.forkedFromId = shape.inferredParentSessionID
                 }
-                let explicitStartOrdinal = subagentHistoryStartOrdinal.flatMap { $0 >= 0 ? $0 : nil }
+                let explicitStartOrdinal = parseState.subagentHistoryStartOrdinal.flatMap { $0 >= 0 ? $0 : nil }
                 let explicitOwnedSuffix: CodexSubagentRolloutShape.CodexSubagentOwnedSuffix? = {
                     guard let startOrdinal = explicitStartOrdinal,
-                          let firstOwnedLine = pendingSubagentLines.first(where: {
+                          let firstOwnedLine = pendingLines.first(where: {
                               ($0.ordinal ?? Int.min) >= startOrdinal
                           })
                     else { return nil }
 
-                    var inheritedTotal = pendingSubagentLines
+                    var inheritedTotal = pendingLines
                         .prefix(while: { ($0.ordinal ?? Int.min) < startOrdinal })
                         .compactMap { buffered -> CostUsageCodexTotals? in
                             buffered.line.boundaryTokenCount?.total
                         }
                         .last
-                    let firstOwnedToken = pendingSubagentLines.first { buffered in
+                    let firstOwnedToken = pendingLines.first { buffered in
                         guard (buffered.ordinal ?? Int.min) >= startOrdinal,
                               let record = buffered.line.boundaryTokenCount
                         else { return false }
@@ -5021,11 +5045,11 @@ enum CostUsageScanner {
                         }
                         return nil
                     }
-                    guard let rawTotalsBaseline = inferredTotal ?? inheritedTotal else { return nil }
+                    guard let inferredRawBaseline = inferredTotal ?? inheritedTotal else { return nil }
                     // No owned token means every buffered token snapshot is inherited.
                     return .init(
                         startLineIndex: firstOwnedLine.lineIndex,
-                        rawTotalsBaseline: rawTotalsBaseline,
+                        rawTotalsBaseline: inferredRawBaseline,
                         firstTokenLineIndex: firstOwnedToken?.lineIndex ?? Int.max)
                 }()
 
@@ -5034,21 +5058,21 @@ enum CostUsageScanner {
                 var ownedSuffix = hasExplicitBoundary ? explicitOwnedSuffix : shape.ownedSuffix
                 var locallyConfirmedBoundary = explicitOwnedSuffix != nil
                 if hasExplicitBoundary {
-                    subagentCounterSemantics = .copiedPrefix
+                    parseState.subagentCounterSemantics = .copiedPrefix
                 } else if let candidate = shape.ownedSuffixCandidate {
                     if candidate.isLocallyConfirmed {
-                        subagentCounterSemantics = .copiedPrefix
+                        parseState.subagentCounterSemantics = .copiedPrefix
                         ownedSuffix = candidate.ownedSuffix
                         locallyConfirmedBoundary = true
-                    } else if let parentSessionID = forkedFromId {
-                        candidateBoundaryDependsOnParentTotals = true
+                    } else if let parentSessionID = parseState.forkedFromId {
+                        parseState.candidateBoundaryDependsOnParentTotals = true
                         if let inheritedTotalsResolver {
-                            switch try inheritedTotalsResolver(parentSessionID, forkTimestamp ?? "") {
+                            switch try inheritedTotalsResolver(parentSessionID, parseState.forkTimestamp ?? "") {
                             case let .resolved(parentTotals):
                                 if Self.codexTotalsEqual(parentTotals, candidate.parentTotalsAtBoundary) {
-                                    subagentCounterSemantics = .copiedPrefix
+                                    parseState.subagentCounterSemantics = .copiedPrefix
                                     ownedSuffix = candidate.ownedSuffix
-                                    parentConfirmedLocalBoundary = true
+                                    parseState.parentConfirmedLocalBoundary = true
                                 }
                             case .unresolved:
                                 break
@@ -5056,33 +5080,34 @@ enum CostUsageScanner {
                         }
                     }
                 }
-                usesLocalSubagentBoundary = hasExplicitBoundary || ownedSuffix != nil
-                suppressUnownedCopiedPrefix = subagentCounterSemantics == .copiedPrefix
+                parseState.usesLocalSubagentBoundary = hasExplicitBoundary || ownedSuffix != nil
+                parseState.suppressUnownedCopiedPrefix = parseState.subagentCounterSemantics == .copiedPrefix
                     && ownedSuffix == nil
-                    && (hasExplicitBoundary || forkedFromId == nil)
+                    && (hasExplicitBoundary || parseState.forkedFromId == nil)
                 if let ownedSuffix {
-                    previousTotals = nil
+                    parseState.previousTotals = nil
                     // Keep totals-derived accounting after the boundary. Real flat-total rows
                     // repeat the previous token payload with a fresh outer timestamp; their
                     // non-zero `last` is replay evidence, not new usage (#2037).
-                    rawTotalsBaseline = ownedSuffix.rawTotalsBaseline
-                    sawDivergentTotals = false
-                    tracker = CodexTotalsTracker(
+                    parseState.rawTotalsBaseline = ownedSuffix.rawTotalsBaseline
+                    parseState.sawDivergentTotals = false
+                    parseState.tracker = CodexTotalsTracker(
                         watermark: ownedSuffix.rawTotalsBaseline,
                         seenRawTotals: [],
                         sawInterleavedTotals: false)
-                    currentModel = nil
-                    currentTurnID = nil
+                    parseState.currentModel = nil
+                    parseState.currentTurnID = nil
                 }
                 self.log.debug(
                     "Codex cost usage classified subagent rollout counter semantics",
                     metadata: [
-                        "sessionId": sessionId ?? "unknown",
-                        "semantics": subagentCounterSemantics == .copiedPrefix ? "copiedPrefix" : "independent",
+                        "sessionId": parseState.sessionId ?? "unknown",
+                        "semantics": parseState
+                            .subagentCounterSemantics == .copiedPrefix ? "copiedPrefix" : "independent",
                         "localBoundary": ownedSuffix == nil ? "false" : "true",
                         "locallyConfirmedBoundary": locallyConfirmedBoundary ? "true" : "false",
-                        "parentConfirmedBoundary": parentConfirmedLocalBoundary ? "true" : "false",
-                        "suppressedUnownedPrefix": suppressUnownedCopiedPrefix ? "true" : "false",
+                        "parentConfirmedBoundary": parseState.parentConfirmedLocalBoundary ? "true" : "false",
+                        "suppressedUnownedPrefix": parseState.suppressUnownedCopiedPrefix ? "true" : "false",
                         "sessionMetadataCount": String(observations.count(where: {
                             if case .sessionMetadata = $0.kind {
                                 true
@@ -5092,7 +5117,7 @@ enum CostUsageScanner {
                         })),
                     ])
                 try configureForkAccountingIfReady()
-                for buffered in pendingSubagentLines
+                for buffered in pendingLines
                     where ownedSuffix.map({ buffered.lineIndex >= $0.startLineIndex }) ?? true
                 {
                     if case .tokenCount = buffered.line,
@@ -5111,66 +5136,73 @@ enum CostUsageScanner {
             jsonlResumeState = initialJSONLResumeState
         }
 
-        let forkAccountingState: CodexForkAccountingState? = if let sessionId, let forkedFromId,
-                                                                !isSubagentThread, forkBaselineResolved,
-                                                                !hasUnresolvedForkBaseline
+        let forkAccountingState: CodexForkAccountingState? = if let resolvedSessionId = parseState.sessionId,
+                                                                let resolvedForkedFromId = parseState.forkedFromId,
+                                                                !parseState.isSubagentThread,
+                                                                parseState.forkBaselineResolved,
+                                                                !parseState.hasUnresolvedForkBaseline
         {
             CodexForkAccountingState(
                 metadata: CodexSessionMetadata(
-                    sessionId: sessionId,
-                    forkedFromId: forkedFromId,
-                    forkTimestamp: forkTimestamp,
-                    projectPath: projectPath,
+                    sessionId: resolvedSessionId,
+                    forkedFromId: resolvedForkedFromId,
+                    forkTimestamp: parseState.forkTimestamp,
+                    projectPath: parseState.projectPath,
                     isSubagentThread: false,
                     subagentHistoryStartOrdinal: nil,
-                    historyBaseThreadId: historyBaseThreadId),
-                inheritedTotals: inheritedTotals,
-                remainingInheritedTotals: remainingInheritedTotals)
+                    historyBaseThreadId: parseState.historyBaseThreadId),
+                inheritedTotals: parseState.inheritedTotals,
+                remainingInheritedTotals: parseState.remainingInheritedTotals)
         } else {
             nil
         }
         return CodexParseResult(
-            days: days,
+            days: parseState.days,
             parsedBytes: parsedBytes,
             scanTargetSize: effectiveTargetSize,
-            lastModel: currentModel,
-            lastTotals: sawDivergentTotals && !Self.codexTotalsEqual(rawTotalsBaseline, previousTotals)
+            lastModel: parseState.currentModel,
+            lastTotals: parseState.sawDivergentTotals && !Self.codexTotalsEqual(
+                parseState.rawTotalsBaseline,
+                parseState.previousTotals)
                 ? nil
-                : previousTotals,
-            lastCountedTotals: previousTotals,
-            lastRawTotalsBaseline: rawTotalsBaseline,
-            lastRawTotalsWatermark: tracker.watermark,
-            seenRawTotals: tracker.seenRawTotals,
-            hasDivergentTotals: sawDivergentTotals && !Self.codexTotalsEqual(rawTotalsBaseline, previousTotals),
-            hasInterleavedTotals: tracker.sawInterleavedTotals,
-            lastCodexTurnID: currentTurnID,
-            sessionId: sessionId,
-            forkedFromId: forkedFromId,
-            dependsOnParentTotals: forkedFromId != nil
-                && (candidateBoundaryDependsOnParentTotals
-                    || (subagentCounterSemantics != .independent && !usesLocalSubagentBoundary)),
-            projectPath: projectPath,
-            codexSession: codexSession,
-            rows: rows,
-            nextUsageRowIndex: codexUsageRowIndex,
-            tokenSnapshots: tokenSnapshots,
+                : parseState.previousTotals,
+            lastCountedTotals: parseState.previousTotals,
+            lastRawTotalsBaseline: parseState.rawTotalsBaseline,
+            lastRawTotalsWatermark: parseState.tracker.watermark,
+            seenRawTotals: parseState.tracker.seenRawTotals,
+            hasDivergentTotals: parseState.sawDivergentTotals && !Self.codexTotalsEqual(
+                parseState.rawTotalsBaseline,
+                parseState.previousTotals),
+            hasInterleavedTotals: parseState.tracker.sawInterleavedTotals,
+            lastCodexTurnID: parseState.currentTurnID,
+            sessionId: parseState.sessionId,
+            forkedFromId: parseState.forkedFromId,
+            dependsOnParentTotals: parseState.forkedFromId != nil
+                && (parseState.candidateBoundaryDependsOnParentTotals
+                    || (parseState.subagentCounterSemantics != .independent && !parseState.usesLocalSubagentBoundary)),
+            projectPath: parseState.projectPath,
+            codexSession: parseState.codexSession,
+            rows: parseState.rows,
+            nextUsageRowIndex: parseState.codexUsageRowIndex,
+            tokenSnapshots: parseState.tokenSnapshots,
             jsonlResumeState: jsonlResumeState,
             bufferedSubagentLines: parsedBytes < effectiveTargetSize
                 || effectiveTargetSize < currentFileSize
                 || jsonlResumeState != nil
-                || hasUnresolvedForkBaseline
-                ? pendingSubagentLines
+                || parseState.hasUnresolvedForkBaseline
+                ? parseState.pendingSubagentLines
                 : nil,
-            bufferedUnresolvedForkLines: hasUnresolvedForkBaseline
-                ? bufferedUnresolvedForkLines
+            bufferedUnresolvedForkLines: parseState.hasUnresolvedForkBaseline
+                ? parseState.bufferedUnresolvedForkLines
                 : nil,
-            rowSourceEndOffsets: rowSourceEndOffsets,
+            rowSourceEndOffsets: parseState.rowSourceEndOffsets,
             forkAccountingState: forkAccountingState,
-            requestLedgerState: requestLedger.responseIDs.isEmpty && requestLedger.legacyRowIndices.isEmpty
-                && requestLedger.turnModels.isEmpty && requestLedger.activeTurnID == nil
-                && requestLedger.sessionID == sessionId
-                ? nil : requestLedger,
-            replacedLegacyRowIndices: replacedLegacyRowIndices)
+            requestLedgerState: parseState.requestLedger.responseIDs.isEmpty && parseState.requestLedger
+                .legacyRowIndices.isEmpty
+                && parseState.requestLedger.turnModels.isEmpty && parseState.requestLedger.activeTurnID == nil
+                && parseState.requestLedger.sessionID == parseState.sessionId
+                ? nil : parseState.requestLedger,
+            replacedLegacyRowIndices: parseState.replacedLegacyRowIndices)
     }
 
     private static func codexTurnID(from payload: [String: Any]) -> String? {

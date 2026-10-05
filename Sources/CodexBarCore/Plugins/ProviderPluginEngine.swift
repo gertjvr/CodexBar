@@ -1,4 +1,3 @@
-import CoreFoundation
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
@@ -163,12 +162,12 @@ final class JSONProviderPluginValue: ProviderPluginValue {
 
     var isNumber: Bool {
         guard let number = self.value as? NSNumber else { return false }
-        return CFGetTypeID(number) != CFBooleanGetTypeID()
+        return !JSONNumber.isBoolean(number)
     }
 
     var isBoolean: Bool {
         guard let number = self.value as? NSNumber else { return false }
-        return CFGetTypeID(number) == CFBooleanGetTypeID()
+        return JSONNumber.isBoolean(number)
     }
 
     var isDate: Bool {

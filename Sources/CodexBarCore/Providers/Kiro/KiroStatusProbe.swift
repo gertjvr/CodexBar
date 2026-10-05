@@ -300,27 +300,6 @@ public enum KiroStatusProbeError: LocalizedError, Sendable {
 }
 
 public struct KiroStatusProbe: Sendable {
-    struct PipeProcessRegistry: Sendable {
-        let beginLaunch: @Sendable () -> Bool
-        let endLaunch: @Sendable () -> Void
-        let register: @Sendable (pid_t, String) -> Bool
-        let updateProcessGroup: @Sendable (pid_t, pid_t?) -> Void
-        let unregister: @Sendable (pid_t) -> Void
-
-        static let live = Self(
-            beginLaunch: { TTYCommandRunner.beginActiveProcessLaunchForAppShutdown() },
-            endLaunch: { TTYCommandRunner.endActiveProcessLaunchForAppShutdown() },
-            register: { pid, binary in
-                TTYCommandRunner.registerActiveProcessForAppShutdown(pid: pid, binary: binary)
-            },
-            updateProcessGroup: { pid, processGroup in
-                TTYCommandRunner.updateActiveProcessGroupForAppShutdown(pid: pid, processGroup: processGroup)
-            },
-            unregister: { pid in
-                TTYCommandRunner.unregisterActiveProcessForAppShutdown(pid: pid)
-            })
-    }
-
     private let cliBinaryResolver: @Sendable () -> String?
     private let accountProbeTimeout: TimeInterval
     private let usageProbeTimeout: TimeInterval
@@ -676,6 +655,7 @@ public struct KiroStatusProbe: Sendable {
         var env = TTYCommandRunner.enrichedEnvironment()
         env["TERM"] = "xterm-256color"
 
+        #if !os(Windows)
         guard self.pipeProcessRegistry.beginLaunch() else {
             throw KiroStatusProbeError.cliFailed("App shutdown in progress")
         }
@@ -686,15 +666,17 @@ public struct KiroStatusProbe: Sendable {
             }
         }
 
+        #endif
+
         let stdoutCapture = ProcessPipeCapture(pipe: stdoutPipe, onData: { state.markActivity() })
         let stderrCapture = ProcessPipeCapture(pipe: stderrPipe, onData: { state.markActivity() })
         stdoutCapture.start()
         stderrCapture.start()
 
-        let process: SpawnedProcessGroup
+        let process: PipeProcess
         do {
             try Task.checkCancellation()
-            process = try SpawnedProcessGroup.launch(
+            process = try PipeProcess.launch(
                 binary: binary,
                 arguments: arguments,
                 environment: env,
@@ -706,6 +688,9 @@ public struct KiroStatusProbe: Sendable {
             throw error
         }
 
+        #if os(Windows)
+        defer { process.close() }
+        #else
         guard self.pipeProcessRegistry.register(
             process.pid,
             URL(fileURLWithPath: binary).lastPathComponent)
@@ -720,6 +705,7 @@ public struct KiroStatusProbe: Sendable {
         self.pipeProcessRegistry.endLaunch()
         launchReservationHeld = false
         defer { self.pipeProcessRegistry.unregister(process.pid) }
+        #endif
 
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(max(0, timeout)))
@@ -783,7 +769,7 @@ public struct KiroStatusProbe: Sendable {
     }
 
     private static func terminateCancelledPipeProcess(
-        _ process: SpawnedProcessGroup,
+        _ process: PipeProcess,
         stdoutCapture: ProcessPipeCapture,
         stderrCapture: ProcessPipeCapture) async
     {
@@ -1475,5 +1461,38 @@ extension KiroStatusProbe {
 extension String {
     fileprivate var nilIfEmpty: String? {
         self.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : self
+    }
+}
+
+extension KiroStatusProbe {
+    #if os(Windows)
+    private typealias PipeProcess = WindowsManagedProcess
+    #else
+    private typealias PipeProcess = SpawnedProcessGroup
+    #endif
+
+    struct PipeProcessRegistry: Sendable {
+        #if os(Windows)
+        static let live = Self()
+        #else
+        let beginLaunch: @Sendable () -> Bool
+        let endLaunch: @Sendable () -> Void
+        let register: @Sendable (pid_t, String) -> Bool
+        let updateProcessGroup: @Sendable (pid_t, pid_t?) -> Void
+        let unregister: @Sendable (pid_t) -> Void
+
+        static let live = Self(
+            beginLaunch: { TTYCommandRunner.beginActiveProcessLaunchForAppShutdown() },
+            endLaunch: { TTYCommandRunner.endActiveProcessLaunchForAppShutdown() },
+            register: { pid, binary in
+                TTYCommandRunner.registerActiveProcessForAppShutdown(pid: pid, binary: binary)
+            },
+            updateProcessGroup: { pid, processGroup in
+                TTYCommandRunner.updateActiveProcessGroupForAppShutdown(pid: pid, processGroup: processGroup)
+            },
+            unregister: { pid in
+                TTYCommandRunner.unregisterActiveProcessForAppShutdown(pid: pid)
+            })
+        #endif
     }
 }

@@ -8,6 +8,25 @@ struct DashboardClaudeSwapSnapshotTests {
     private let generatedAt = Date(timeIntervalSince1970: 1_800_000_000)
 
     @Test
+    func `redaction bounds unmatched quotes after a previously redacted address`() throws {
+        let accounts = ClaudeSwapAccountProjection.accountSnapshots(
+            from: ClaudeSwapAccountList(
+                activeAccountNumber: 1,
+                accounts: [self.accountRow(
+                    number: 1,
+                    email: "shared@example.com",
+                    alias: "Primary a@internal; secondary \"unterminated@internal",
+                    active: true)]),
+            now: self.generatedAt)
+        let projected = try self.providers(
+            identityMode: .redacted,
+            claudeSwap: DashboardAccountsInput(accounts: accounts, adapterError: nil, weeklyWorkDays: nil))
+        let claude = try #require(projected.first { $0["id"] as? String == "claude" })
+        let rows = try #require(claude["accounts"] as? [[String: Any]])
+        #expect(rows.first?["label"] as? String == "Primary redacted@internalredacted@internal")
+    }
+
+    @Test
     func `projects ordered claude swap accounts with windows pace and redacted identity`() throws {
         let accounts = ClaudeSwapAccountProjection.accountSnapshots(
             from: self.threeAccountList(),

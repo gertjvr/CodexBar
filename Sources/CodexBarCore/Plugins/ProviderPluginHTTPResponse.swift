@@ -1,4 +1,3 @@
-import CoreFoundation
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
@@ -36,7 +35,7 @@ enum ProviderPluginHTTPResponse {
             self.optionalSession = optionalOptions?["cookieSession"] as? String
             Self.redactForm(options, into: redactionValues)
             if let budget = options["optionalBudgetSeconds"] {
-                guard let number = budget as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+                guard let number = budget as? NSNumber, !JSONNumber.isBoolean(number),
                       number.doubleValue.isFinite, (0...5).contains(number.doubleValue)
                 else { throw ProviderPluginError.http("optionalBudgetSeconds must be a number from 0 through 5") }
                 self.optionalBudget = .seconds(number.doubleValue)
@@ -270,7 +269,7 @@ enum ProviderPluginHTTPResponse {
             // and the broker pins that exceptional credential to the official read-only endpoint.
             if let managementAuth = options["openRouterManagementAuth"] {
                 guard let managementAuth = managementAuth as? NSNumber,
-                      CFGetTypeID(managementAuth) == CFBooleanGetTypeID(), managementAuth.boolValue
+                      JSONNumber.isBoolean(managementAuth), managementAuth.boolValue
                 else {
                     throw ProviderPluginError.secretAccess(
                         "OpenRouter management auth is unavailable for this plugin")
@@ -307,7 +306,7 @@ enum ProviderPluginHTTPResponse {
 
     private static func timeoutSeconds(_ options: [String: Any]) throws -> TimeInterval {
         guard let value = options["timeoutSeconds"] else { return 15 }
-        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else {
+        guard let number = value as? NSNumber, !JSONNumber.isBoolean(number) else {
             throw ProviderPluginError.http("timeoutSeconds must be a number from 1 through 90")
         }
         let seconds = number.doubleValue

@@ -306,7 +306,7 @@ enum DashboardSnapshotBuilder {
         var cursor = text.startIndex
         var search = text.startIndex
         while let at = text[search...].firstIndex(of: "@") {
-            let localStart = self.emailTokenStart(in: text, before: at)
+            let localStart = max(cursor, self.emailTokenStart(in: text, before: at))
             let domainEnd = self.emailTokenEnd(in: text, after: at)
             if localStart < at, domainEnd > text.index(after: at) {
                 output += text[cursor..<localStart]
@@ -398,18 +398,18 @@ enum DashboardSnapshotBuilder {
         // Provider-specific by design: Amp subscription payloads model balance and orb as non-time-window kinds.
         let isAmpSubscription = provider == .amp && usage.secondary != nil
 
-        if let primary = usage.primary {
+        if let primary = usage.primary?.measured {
             let kind = isAmpSubscription ? "other" : "session"
             windows.append(self.makeWindow(kind: kind, label: labels.primary, window: primary))
         }
-        if let secondary = usage.secondary {
+        if let secondary = usage.secondary?.measured {
             let kind = isAmpSubscription ? "orb" : "weekly"
             windows.append(self.makeWindow(kind: kind, label: labels.secondary, window: secondary))
         }
-        if let tertiary = usage.tertiary {
+        if let tertiary = usage.tertiary?.measured {
             windows.append(self.makeWindow(kind: "tertiary", label: labels.tertiary, window: tertiary))
         }
-        for extra in usage.extraRateWindows ?? [] {
+        for extra in usage.extraRateWindows ?? [] where extra.usageKnown && !extra.window.isSyntheticPlaceholder {
             windows.append(self.makeWindow(kind: extra.id, label: extra.title, window: extra.window))
         }
 
@@ -432,7 +432,8 @@ enum DashboardSnapshotBuilder {
                 kind: $0.id,
                 label: $0.title,
                 window: $0.window,
-                idle: idleWindowIDs.contains($0.id))
+                idle: idleWindowIDs.contains($0.id),
+                usageKnown: $0.usageKnown && !$0.window.isSyntheticPlaceholder)
         }
     }
 
@@ -465,7 +466,8 @@ enum DashboardSnapshotBuilder {
         kind: String,
         label: String,
         window: RateWindow,
-        idle: Bool = false) -> DashboardWindowPayload
+        idle: Bool = false,
+        usageKnown: Bool = true) -> DashboardWindowPayload
     {
         let used = self.clampedPercent(window.usedPercent)
         let remaining = self.clampedPercent(100 - used)
@@ -475,7 +477,8 @@ enum DashboardSnapshotBuilder {
             usedPercent: used,
             remainingPercent: remaining,
             resetAt: window.resetsAt,
-            idle: idle)
+            idle: idle,
+            usageKnown: usageKnown)
     }
 
     private static func clampedPercent(_ value: Double) -> Double {
@@ -490,13 +493,15 @@ enum DashboardSnapshotBuilder {
     private static func makeReportedCost(_ snapshot: CostUsageTokenSnapshot?) -> DashboardCostPayload? {
         guard let snapshot, snapshot.currencyCode == "USD", snapshot.historyDays == 30 else { return nil }
         let incompleteCount = CostUsageIncompleteRequests.sum(snapshot.daily.map(\.incompleteRequestCount))
-        guard snapshot.last30DaysCostUSD != nil || incompleteCount > 0 else { return nil }
+        guard snapshot.last30DaysCostUSD != nil || incompleteCount > 0 || snapshot.historyScanIsPartial
+        else { return nil }
         // Provider history can use completed UTC days; a matching date key does not establish local Today.
         return DashboardCostPayload(
             todayUSD: nil,
             last30DaysUSD: snapshot.last30DaysCostUSD,
             todayIncompleteRequestCount: nil,
-            last30DaysIncompleteRequestCount: incompleteCount > 0 ? incompleteCount : nil)
+            last30DaysIncompleteRequestCount: incompleteCount > 0 ? incompleteCount : nil,
+            historyScanIsPartial: snapshot.historyScanIsPartial ? true : nil)
     }
 
     private static func makeCost(_ cost: CostPayload?, referenceDate: Date) -> DashboardCostPayload? {
@@ -505,13 +510,15 @@ enum DashboardSnapshotBuilder {
         let todayUSD = today?.costUSD
         let history = self.thirtyDayCost(cost, referenceDate: referenceDate)
         guard todayUSD != nil || history.amount != nil ||
-            (today?.incompleteRequestCount ?? 0) > 0 || (history.incompleteCount ?? 0) > 0
+            (today?.incompleteRequestCount ?? 0) > 0 || (history.incompleteCount ?? 0) > 0 || cost
+            .historyScanIsPartial == true
         else { return nil }
         return DashboardCostPayload(
             todayUSD: todayUSD,
             last30DaysUSD: history.amount,
             todayIncompleteRequestCount: today?.incompleteRequestCount,
-            last30DaysIncompleteRequestCount: history.incompleteCount)
+            last30DaysIncompleteRequestCount: history.incompleteCount,
+            historyScanIsPartial: cost.historyScanIsPartial)
     }
 
     private static func thirtyDayCost(

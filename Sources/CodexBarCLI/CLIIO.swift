@@ -4,6 +4,8 @@ import Darwin
 import Glibc
 #elseif canImport(Musl)
 import Musl
+#elseif os(Windows)
+import ucrt
 #endif
 import Foundation
 
@@ -88,6 +90,8 @@ extension CodexBarCLI {
         let path = "/proc/self/exe"
         guard FileManager.default.fileExists(atPath: path) else { return nil }
         return URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        #elseif os(Windows)
+        return CLIWindowsConsole.executablePath()
         #else
         return nil
         #endif
@@ -164,6 +168,8 @@ extension CodexBarCLI {
         Glibc.exit(code)
         #elseif canImport(Musl)
         Musl.exit(code)
+        #elseif os(Windows)
+        ucrt.exit(code)
         #endif
     }
 }

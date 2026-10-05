@@ -1,3 +1,8 @@
+#if os(Linux)
+// Corelibs Foundation needs this module loaded to deserialize Thread's stored-property types.
+// https://github.com/swiftlang/swift-corelibs-foundation/issues/5108
+import CoreFoundation
+#endif
 import CQuickJS
 import Foundation
 

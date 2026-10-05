@@ -52,4 +52,51 @@ struct ProviderStatusFetchTests {
         #expect(payload.description?.isEmpty == false)
         #expect(payload.updatedAt == nil)
     }
+
+    @Test
+    func `CLI status details preserve grouped components without changing summary fields`() async throws {
+        let transport = ProviderHTTPTransportStub { request in
+            let url = try #require(request.url)
+            let body: String
+            switch url.path {
+            case "/api/v2/status.json", "/api/v2/summary.json":
+                body = #"{"status":{"indicator":"minor","description":"Partial degradation"}}"#
+            case "/api/v2/components.json":
+                body = #"""
+                {"components":[{"id":"api","name":"API","status":"operational"},
+                {"id":"web","name":"Web","status":"degraded_performance"}]}
+                """#
+            default:
+                throw URLError(.resourceUnavailable)
+            }
+            return (Data(body.utf8), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let payload = try #require(await CodexBarCLI.fetchStatus(
+            for: .claude,
+            includeComponents: true,
+            transport: transport))
+        #expect(payload.indicator == .minor)
+        #expect(payload.description == "Partial degradation")
+        #expect(payload.components?.map(\.name) == ["API", "Web"])
+        let json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(payload)) as? [String: Any])
+        let components = try #require(json["components"] as? [[String: Any]])
+        #expect(components[1]["status"] as? String == "degraded_performance")
+    }
+
+    @Test
+    func `unavailable component feed does not erase a successful status summary`() async throws {
+        let transport = ProviderHTTPTransportStub { request in
+            let url = try #require(request.url)
+            guard url.path == "/api/v2/status.json" else { throw URLError(.notConnectedToInternet) }
+            return (
+                Data(#"{"status":{"indicator":"none","description":"Operational"}}"#.utf8),
+                HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let payload = try #require(await CodexBarCLI.fetchStatus(
+            for: .claude,
+            includeComponents: true,
+            transport: transport))
+        #expect(payload.indicator == .none)
+        #expect(payload.components == nil)
+    }
 }

@@ -21,8 +21,8 @@ func makeAntigravityWarmDependencies(
     processInfos: @escaping @Sendable (TimeInterval) async throws -> [AntigravityStatusProbe.ProcessInfoResult],
     listeningPorts: @escaping @Sendable (Int, TimeInterval) async throws -> [Int],
     fetchSnapshot: @escaping @Sendable ([Int], TimeInterval) async throws -> AntigravityStatusSnapshot,
-    processOwnerUserID: @escaping @Sendable (Int) -> UInt32? = { _ in 0 },
-    currentUserID: @escaping @Sendable () -> UInt32 = { 0 },
+    processOwnerUserID: @escaping @Sendable (Int) -> String? = { _ in "0" },
+    currentUserID: @escaping @Sendable () -> String = { "0" },
     ownedPID: @escaping @Sendable () async -> Int? = { nil },
     now: @escaping @Sendable () -> Date = Date.init)
     -> AntigravityCLIHTTPSFetchStrategy.WarmAgyDependencies

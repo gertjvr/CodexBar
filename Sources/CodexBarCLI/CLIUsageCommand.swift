@@ -81,7 +81,7 @@ extension CodexBarCLI {
         var exitCode: ExitCode = .success
 
         for p in providerList {
-            let status = setup.includeStatus ? await Self.fetchStatus(for: p) : nil
+            let status = setup.includeStatus ? await Self.fetchStatus(for: p, includeComponents: true) : nil
             if appAutoVerifier {
                 // Background app Auto intentionally launches the opaque Claude owner CLI only after a successful
                 // user-initiated fetch has established this process's account-scoped availability marker. Recreate

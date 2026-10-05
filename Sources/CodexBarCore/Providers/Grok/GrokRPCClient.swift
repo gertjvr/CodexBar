@@ -8,7 +8,7 @@ import Foundation
 final class GrokRPCClient: @unchecked Sendable {
     private static let log = CodexBarLog.logger(LogCategories.provider(.grok))
 
-    private let process = Process()
+    private let process = RPCChildProcess()
     private let stdin = RPCChildProcessInput()
     private let stdoutPipe = Pipe()
     private let stderrPipe = Pipe()
@@ -44,15 +44,14 @@ final class GrokRPCClient: @unchecked Sendable {
         var env = environment
         env["PATH"] = PathBuilder.effectivePATH(purposes: [.rpc], env: env)
 
-        self.process.environment = env
-        self.process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        self.process.arguments = [resolvedExec] + arguments
-        self.process.standardInput = self.stdin.pipe
-        self.process.standardOutput = self.stdoutPipe
-        self.process.standardError = self.stderrPipe
-
         do {
-            try self.process.run()
+            try self.process.launch(
+                executable: resolvedExec,
+                arguments: arguments,
+                environment: env,
+                stdin: self.stdin.pipe,
+                stdout: self.stdoutPipe,
+                stderr: self.stderrPipe)
             Self.log.debug("Grok RPC started", metadata: ["binary": resolvedExec])
         } catch {
             Self.log.warning("Grok RPC failed to start", metadata: ["error": error.localizedDescription])

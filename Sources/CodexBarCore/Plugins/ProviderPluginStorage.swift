@@ -56,8 +56,12 @@ final class ProviderPluginStorage: @unchecked Sendable {
             }
             try Self.validate(values)
             let data = try JSONEncoder().encode(Payload(version: 1, values: values))
+            #if os(Windows)
+            try CredentialFileWriter.writePrivate(data, to: self.fileURL)
+            #else
             try data.write(to: self.fileURL, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: self.fileURL.path)
+            #endif
             return nil
         }
     }
@@ -96,6 +100,16 @@ final class ProviderPluginStorage: @unchecked Sendable {
 
     private func withFileLock<T>(_ body: () throws -> T) throws -> T {
         try self.lock.withLock {
+            #if os(Windows)
+            try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
+            guard let result = try InterprocessFileLock.withLock(
+                at: self.fileURL.appendingPathExtension("lock"),
+                wait: false,
+                requireCurrentOwner: true,
+                operation: body)
+            else { throw ProviderPluginError.script("plugin storage is busy") }
+            return result
+            #else
             try FileManager.default.createDirectory(
                 at: self.directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let descriptor = open(
@@ -114,6 +128,7 @@ final class ProviderPluginStorage: @unchecked Sendable {
             }
             defer { _ = flock(descriptor, LOCK_UN) }
             return try body()
+            #endif
         }
     }
 }

@@ -97,6 +97,10 @@ public struct CodexBarConfigStore: @unchecked Sendable {
         try self.fileManager.createDirectory(
             at: self.fileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true)
+        #if os(Windows)
+        _ = try InterprocessFileLock.withLock(
+            at: self.fileURL.appendingPathExtension("lock"), wait: wait, requireCurrentOwner: true, operation: body)
+        #else
         // Keep this inode: unlinking the lock could give simultaneous writers different locks.
         let descriptor = open(
             self.fileURL.appendingPathExtension("lock").path,
@@ -115,6 +119,7 @@ public struct CodexBarConfigStore: @unchecked Sendable {
         }
         defer { _ = flock(descriptor, LOCK_UN) }
         try body()
+        #endif
     }
 
     public static func defaultURL(

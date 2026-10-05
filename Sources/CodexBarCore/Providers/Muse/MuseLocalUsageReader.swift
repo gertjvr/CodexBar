@@ -1,12 +1,4 @@
-import CoreFoundation
 import Foundation
-#if canImport(Darwin)
-import Darwin
-#elseif canImport(Glibc)
-import Glibc
-#elseif canImport(Musl)
-import Musl
-#endif
 
 /// Reads Muse token usage from the durable session logs the CLI writes locally.
 ///
@@ -431,11 +423,9 @@ enum MuseLocalUsageReader {
             return ParsedLog(isComplete: false)
         }
         try budget.chargeFile(size)
-        let descriptor = url.path.withCString { open($0, O_RDONLY | O_NONBLOCK | O_NOFOLLOW) }
-        guard descriptor >= 0 else { return ParsedLog(isComplete: false) }
-        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        guard let handle = try? UsageFileMetadata.openRegularFile(at: url) else { return ParsedLog(isComplete: false) }
         defer { try? handle.close() }
-        guard MuseLocalUsageCache.FileStamp.read(descriptor: descriptor) == stamp else {
+        guard MuseLocalUsageCache.FileStamp.read(from: handle) == stamp else {
             return ParsedLog(isComplete: false)
         }
         var parsed = ParsedLog()
@@ -562,7 +552,7 @@ enum MuseLocalUsageReader {
     }
 
     private static func integer(_ value: Any?) -> Int? {
-        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        guard let number = value as? NSNumber, !JSONNumber.isBoolean(number) else { return nil }
         return Int(number.stringValue)
     }
 

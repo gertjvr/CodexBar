@@ -711,7 +711,8 @@ extension CodexBarCLI {
             incompleteRequestCount: snapshot
                 .map { CostUsageIncompleteRequests.sum($0.daily.map(\.incompleteRequestCount)) },
             reportingPeriod: snapshot.map { ($0.reportingPeriod ?? .rolling(days: $0.historyDays)).rawValue },
-            historyLabel: snapshot?.periodLabel)
+            historyLabel: snapshot?.periodLabel,
+            historyScanIsPartial: snapshot?.historyScanIsPartial == true ? true : nil)
     }
 
     static func makeOpenCodexCostPayload(
@@ -983,6 +984,7 @@ struct CostPayload: Encodable, Sendable {
     let reportingPeriod: String?
     let historyLabel: String?
     let historyCoverageIsEstablished: Bool?
+    let historyScanIsPartial: Bool?
     let last30DaysTokens: Int?
     let last30DaysCostUSD: Double?
     let meteredCostUSD: Double?
@@ -1015,7 +1017,8 @@ struct CostPayload: Encodable, Sendable {
         error: ProviderErrorPayload?,
         incompleteRequestCount: Int? = nil,
         reportingPeriod: String? = nil,
-        historyLabel: String? = nil)
+        historyLabel: String? = nil,
+        historyScanIsPartial: Bool? = nil)
     {
         self.incompleteRequestCount = incompleteRequestCount.flatMap { $0 > 0 ? $0 : nil }
         self.provider = provider
@@ -1028,6 +1031,7 @@ struct CostPayload: Encodable, Sendable {
         self.reportingPeriod = reportingPeriod
         self.historyLabel = historyLabel
         self.historyCoverageIsEstablished = historyCoverageIsEstablished
+        self.historyScanIsPartial = historyScanIsPartial == true ? true : nil
         self.last30DaysTokens = last30DaysTokens
         self.last30DaysCostUSD = last30DaysCostUSD
         self.meteredCostUSD = meteredCostUSD

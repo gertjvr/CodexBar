@@ -76,7 +76,7 @@ let package = Package(
                 name: "CodexBarCore",
                 dependencies: [
                     "CQuickJS",
-                    .target(name: "CSQLite3", condition: .when(platforms: [.linux])),
+                    .target(name: "CSQLite3", condition: .when(platforms: [.linux, .windows])),
                     .product(name: "Crypto", package: "swift-crypto"),
                     .product(name: "Logging", package: "swift-log"),
                     .product(name: "SweetCookieKit", package: "SweetCookieKit"),
@@ -88,6 +88,7 @@ let package = Package(
                     .enableUpcomingFeature("StrictConcurrency"),
                 ],
                 linkerSettings: sqlite3LinkerSettings + [
+                    .linkedLibrary("Advapi32", .when(platforms: [.windows])),
                     .linkedFramework("JavaScriptCore", .when(platforms: [.macOS])),
                 ]),
             .executableTarget(
@@ -101,7 +102,9 @@ let package = Package(
                 swiftSettings: [
                     .enableUpcomingFeature("StrictConcurrency"),
                 ],
-                linkerSettings: sqlite3LinkerSettings),
+                linkerSettings: sqlite3LinkerSettings + [
+                    .linkedLibrary("Ws2_32", .when(platforms: [.windows])),
+                ]),
             // Crash-test subprocess: tests SIGKILL it mid-save to prove the cost store's
             // save cycle is atomic. Not shipped; built only as a test dependency.
             .executableTarget(
@@ -162,19 +165,23 @@ let package = Package(
                     .enableUpcomingFeature("StrictConcurrency"),
                     .enableExperimentalFeature("SwiftTesting"),
                 ]),
-            .testTarget(
-                name: "CodexBarLinuxTests",
-                dependencies: [
-                    "CodexBarCore",
-                    "CodexBarCLI",
-                    .target(name: "CSQLite3", condition: .when(platforms: [.linux])),
-                ],
-                path: "TestsLinux",
-                swiftSettings: [
-                    .enableUpcomingFeature("StrictConcurrency"),
-                    .enableExperimentalFeature("SwiftTesting"),
-                ]),
         ]
+
+        #if !os(Windows)
+        // These suites exercise Unix process, filesystem, and shell behavior.
+        targets.append(.testTarget(
+            name: "CodexBarLinuxTests",
+            dependencies: [
+                "CodexBarCore",
+                "CodexBarCLI",
+                .target(name: "CSQLite3", condition: .when(platforms: [.linux, .windows])),
+            ],
+            path: "TestsLinux",
+            swiftSettings: [
+                .enableUpcomingFeature("StrictConcurrency"),
+                .enableExperimentalFeature("SwiftTesting"),
+            ]))
+        #endif
 
         #if os(macOS)
         targets.append(contentsOf: [
@@ -229,6 +236,7 @@ let package = Package(
             exclude: [
                 "AdaptiveReplayCLITests",
                 "AdaptiveReplayKitTests",
+                "WindowsPortabilitySmoke",
                 "CodexBarTests/ProviderPluginDetailsParityTests.swift",
                 "CodexBarTests/ProviderPluginExtensionParityTests.swift",
                 "CodexBarTests/ProviderPluginParityTests.swift",

@@ -68,11 +68,16 @@ actor ClaudeCLISession {
         let sendEnterEvery: TimeInterval?
     }
 
+    #if os(Windows)
+    private var process: WindowsManagedProcess?
+    private var console: WindowsPseudoConsole?
+    #else
     private var process: Process?
     private var primaryFD: Int32 = -1
     private var primaryHandle: FileHandle?
     private var secondaryHandle: FileHandle?
     private var processGroup: pid_t?
+    #endif
     private var sessionIdentity: SessionIdentity?
     private var startedAt: Date?
     private var launchedInProbeDirectory = false
@@ -170,7 +175,7 @@ actor ClaudeCLISession {
         var trustKeysLeft = 4
         var stoppedEarly = false
         while Date() < deadline {
-            let newData = self.readChunk()
+            let newData = try self.readChunk()
             if !newData.isEmpty {
                 try appendOutput(newData)
                 lastOutputAt = Date()
@@ -299,6 +304,33 @@ actor ClaudeCLISession {
         self.cleanup()
         let workingDirectory = try self.workingDirectory ?? Self.isolatedProbeWorkingDirectoryURL()
 
+        // A crashed probe can leave a JSONL behind. Claude treats `--session-id` as creation-only when that local
+        // transcript exists, so clear the probe-owned artifact before reusing the account-side identifier.
+        ClaudeProbeSessionArtifactCleaner.cleanupProbeSessionArtifacts(
+            probeDirectory: workingDirectory,
+            environment: sessionIdentity.environment)
+        let sessionID = Self.loadOrCreateProbeSessionID(in: workingDirectory)
+        let claudeArguments = Self.launchArguments(sessionID: sessionID)
+        var env = sessionIdentity.environment
+        env["PWD"] = workingDirectory.path
+
+        #if os(Windows)
+        let console = try WindowsPseudoConsole(
+            rows: UInt16(ClaudeCLIScreen.rows),
+            columns: UInt16(ClaudeCLIScreen.columns))
+        do {
+            self.process = try WindowsManagedProcess.launch(
+                binary: request.binary,
+                arguments: claudeArguments,
+                environment: env,
+                workingDirectory: workingDirectory,
+                console: console)
+            self.console = console
+        } catch {
+            console.close()
+            throw SessionError.launchFailed(error.localizedDescription)
+        }
+        #else
         var primaryFD: Int32 = -1
         var secondaryFD: Int32 = -1
         var win = winsize(
@@ -317,13 +349,6 @@ actor ClaudeCLISession {
 
         let proc = Process()
         let resolvedURL = URL(fileURLWithPath: request.binary)
-        // A crashed probe can leave a JSONL behind. Claude treats `--session-id` as creation-only when that local
-        // transcript exists, so clear the probe-owned artifact before reusing the account-side identifier.
-        ClaudeProbeSessionArtifactCleaner.cleanupProbeSessionArtifacts(
-            probeDirectory: workingDirectory,
-            environment: sessionIdentity.environment)
-        let sessionID = Self.loadOrCreateProbeSessionID(in: workingDirectory)
-        let claudeArguments = Self.launchArguments(sessionID: sessionID)
         let disableWatchdog = sessionIdentity.environment["CODEXBAR_DISABLE_CLAUDE_WATCHDOG"] == "1"
         if !disableWatchdog,
            resolvedURL.lastPathComponent == "claude",
@@ -340,8 +365,6 @@ actor ClaudeCLISession {
         proc.standardError = secondaryHandle
 
         proc.currentDirectoryURL = workingDirectory
-        var env = sessionIdentity.environment
-        env["PWD"] = workingDirectory.path
         proc.environment = env
 
         guard TTYCommandRunner.beginActiveProcessLaunchForAppShutdown() else {
@@ -386,6 +409,7 @@ actor ClaudeCLISession {
         self.primaryHandle = primaryHandle
         self.secondaryHandle = secondaryHandle
         self.processGroup = processGroup
+        #endif
         self.sessionIdentity = sessionIdentity
         self.startedAt = Date()
         // Only the dedicated probe directory may be trusted, never `probeWorkingDirectoryURL()`'s temporary fallback.
@@ -474,6 +498,11 @@ actor ClaudeCLISession {
     }
 
     private func cleanup() {
+        #if os(Windows)
+        self.process?.close()
+        self.console?.close()
+        self.console = nil
+        #else
         if self.process != nil {
             Self.log.debug("Claude CLI session stopping")
         }
@@ -513,17 +542,30 @@ actor ClaudeCLISession {
             TTYCommandRunner.unregisterActiveProcessForAppShutdown(pid: proc.processIdentifier)
         }
 
-        self.process = nil
         self.primaryHandle = nil
         self.secondaryHandle = nil
         self.primaryFD = -1
         self.processGroup = nil
+        #endif
+        self.process = nil
         self.sessionIdentity = nil
         self.startedAt = nil
         self.launchedInProbeDirectory = false
     }
 
-    private func readChunk() -> Data {
+    private func readChunk() throws -> Data {
+        #if os(Windows)
+        guard let console = self.console else { throw SessionError.processExited }
+        do {
+            return try console.readAvailable().data
+        } catch SubprocessRunnerError.outputTooLarge {
+            self.cleanup()
+            throw SessionError.outputTooLarge
+        } catch {
+            self.cleanup()
+            throw SessionError.ioFailed(error.localizedDescription)
+        }
+        #else
         guard self.primaryFD >= 0 else { return Data() }
         var appended = Data()
         while true {
@@ -536,6 +578,7 @@ actor ClaudeCLISession {
             break
         }
         return appended
+        #endif
     }
 
     private func sendPeriodicEnterIfNeeded(every: TimeInterval?, lastEnterAt: inout Date) {
@@ -549,6 +592,10 @@ actor ClaudeCLISession {
     }
 
     private func writeAllToPrimary(_ data: Data) throws {
+        #if os(Windows)
+        guard let console = self.console else { throw SessionError.processExited }
+        try console.send(data)
+        #else
         guard self.primaryFD >= 0 else { throw SessionError.processExited }
         try data.withUnsafeBytes { rawBytes in
             guard let baseAddress = rawBytes.baseAddress else { return }
@@ -577,5 +624,6 @@ actor ClaudeCLISession {
                 throw SessionError.ioFailed("write to PTY failed: \(String(cString: strerror(err)))")
             }
         }
+        #endif
     }
 }

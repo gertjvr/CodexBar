@@ -1,5 +1,8 @@
 import Dispatch
 import Foundation
+#if os(Windows)
+import WinSDK
+#endif
 
 #if canImport(SQLite3)
 import SQLite3
@@ -96,7 +99,7 @@ actor CostUsageStore {
     private final class SQLiteConnection: @unchecked Sendable {
         private(set) var handle: OpaquePointer?
         let identity: DatabaseIdentity?
-        let generation = UUID()
+        let generation = Foundation.UUID()
 
         init(handle: OpaquePointer, identity: DatabaseIdentity?) {
             self.handle = handle
@@ -122,6 +125,7 @@ actor CostUsageStore {
         parserHash: CodexParserHash.value)
     static let cacheGeneration = "sqlite:\(CostUsageStore.schemaVersion)"
     static let compatiblePredecessorParserHashes: Set<String> = [
+        "47443f6ee10929b9", // Windows 0.60.x uses the same v3 tables and optional legacy row/checkpoint fields.
         "029fe80aa98f27e8", // Revision 7 caches retain history during bounded JSON-fallback reparsing.
         "c61aebb9cf043a72", // Revision 6 ledger caches reparse through the shared ownership router.
         "4a4c4ef34ce6f037", // Request-ledger accounting uses bounded native parser-revision migration.
@@ -197,7 +201,7 @@ actor CostUsageStore {
     private let busyTimeoutMilliseconds: Int32
     private var connection: SQLiteConnection?
     var requiresReadReopen = false
-    private var failureGeneration = UUID()
+    private var failureGeneration = Foundation.UUID()
     var retainedCodexBaseline: RetainedCodexBaseline?
     var retainedCodexRead: RetainedCodexRead?
     var retainedCodexScan: CodexDecodedBaseline?
@@ -458,7 +462,7 @@ extension CostUsageStore {
         switch code & 0xFF {
         case SQLITE_PERM, SQLITE_BUSY, SQLITE_LOCKED, SQLITE_NOMEM, SQLITE_READONLY,
              SQLITE_INTERRUPT, SQLITE_IOERR, SQLITE_FULL, SQLITE_TOOBIG, SQLITE_CONSTRAINT,
-             SQLITE_MISUSE, SQLITE_AUTH, SQLITE_RANGE:
+             SQLITE_MISUSE, SQLITE_AUTH, SQLITE_RANGE, SQLITE_NOTFOUND:
             return false
         default:
             return true
@@ -472,7 +476,7 @@ extension CostUsageStore {
         self.retainedCodexBaseline = nil
         self.retainedCodexRead = nil
         self.retainedCodexScan = nil
-        self.failureGeneration = UUID()
+        self.failureGeneration = Foundation.UUID()
         guard let handle = self.connection?.handle else { return }
         if sqlite3_get_autocommit(handle) == 0,
            sqlite3_exec(handle, "ROLLBACK", nil, nil, nil) != SQLITE_OK
@@ -483,13 +487,17 @@ extension CostUsageStore {
     }
 
     struct DatabaseIdentity: Equatable {
+        #if os(Windows)
+        var fileID: String
+        #else
         var device: UInt64
         var inode: UInt64
+        #endif
     }
 
     struct DatabaseStamp: Equatable {
-        var generation: UUID
-        var failureGeneration: UUID
+        var generation: Foundation.UUID
+        var failureGeneration: Foundation.UUID
         var identity: DatabaseIdentity
         var dataVersion: Int64
         var totalChanges: Int64
@@ -499,19 +507,48 @@ extension CostUsageStore {
     }
 
     private static func databaseIdentity(at url: URL) -> DatabaseIdentity? {
+        #if os(Windows)
+        guard let metadata = UsageFileMetadata.read(at: url, followingSymlinks: false), metadata.isRegularFile else {
+            return nil
+        }
+        return DatabaseIdentity(fileID: metadata.fileID)
+        #else
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
               let device = attributes[.systemNumber] as? NSNumber,
               let inode = attributes[.systemFileNumber] as? NSNumber else { return nil }
         return DatabaseIdentity(device: device.uint64Value, inode: inode.uint64Value)
+        #endif
+    }
+
+    private static func databaseIdentity(of database: OpaquePointer, at url: URL) throws -> DatabaseIdentity? {
+        #if os(Windows)
+        // Windows SQLite does not implement HAS_MOVED. Compare its borrowed native handle,
+        // including the full ReFS file identifier, against the no-follow pathname instead.
+        var handle: HANDLE?
+        let result = sqlite3_file_control(database, "main", SQLITE_FCNTL_WIN32_GET_HANDLE, &handle)
+        guard result == SQLITE_OK else { throw StoreError.sqlite(result) }
+        guard let handle, handle != INVALID_HANDLE_VALUE,
+              let metadata = UsageFileMetadata.read(fromNativeWindowsHandle: handle), metadata.isRegularFile
+        else { throw StoreError.sqlite(SQLITE_IOERR) }
+        return DatabaseIdentity(fileID: metadata.fileID)
+        #else
+        return self.databaseIdentity(at: url)
+        #endif
     }
 
     private func connectionMatchesPath(_ database: OpaquePointer) throws -> Bool {
+        #if os(Windows)
+        let heldIdentity = try Self.databaseIdentity(of: database, at: self.databaseURL)
+        guard let identity = self.connection?.identity,
+              identity == heldIdentity else { return false }
+        #else
         var moved: Int32 = 0
         // Path attributes alone cannot identify the file held by SQLite after replacement.
         guard sqlite3_file_control(database, "main", SQLITE_FCNTL_HAS_MOVED, &moved) == SQLITE_OK else {
             throw StoreError.sqlite(SQLITE_IOERR)
         }
         guard moved == 0, let identity = self.connection?.identity else { return false }
+        #endif
         return identity == Self.databaseIdentity(at: self.databaseURL)
     }
 
@@ -565,7 +602,7 @@ extension CostUsageStore {
             self.retainedCodexBaseline = nil
             self.retainedCodexRead = nil
             self.retainedCodexScan = nil
-            self.failureGeneration = UUID()
+            self.failureGeneration = Foundation.UUID()
             throw error
         }
     }
@@ -596,7 +633,14 @@ extension CostUsageStore {
         self.requiresReadReopen = false
         do {
             let opened = try self.openDatabase()
-            self.connection = SQLiteConnection(handle: opened, identity: Self.databaseIdentity(at: self.databaseURL))
+            let identity: DatabaseIdentity?
+            do {
+                identity = try Self.databaseIdentity(of: opened, at: self.databaseURL)
+            } catch {
+                sqlite3_close_v2(opened)
+                throw error
+            }
+            self.connection = SQLiteConnection(handle: opened, identity: identity)
             return opened
         } catch {
             guard Self.shouldRebuild(after: error) else { throw error }
@@ -756,7 +800,9 @@ extension CostUsageStore {
         self.rebuildCount += 1
         Self.log.warning("cost-usage store rebuilt (count \(self.rebuildCount)): \(reason)")
         if let database = try? self.openDatabase() {
-            self.connection = SQLiteConnection(handle: database, identity: Self.databaseIdentity(at: self.databaseURL))
+            self.connection = SQLiteConnection(
+                handle: database,
+                identity: try? Self.databaseIdentity(of: database, at: self.databaseURL))
         }
     }
 

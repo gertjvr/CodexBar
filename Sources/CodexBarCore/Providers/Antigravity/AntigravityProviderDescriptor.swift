@@ -343,8 +343,8 @@ struct AntigravityCLIHTTPSFetchStrategy: ProviderFetchStrategy {
         let processInfos: @Sendable (TimeInterval) async throws -> [AntigravityStatusProbe.ProcessInfoResult]
         let listeningPorts: @Sendable (Int, TimeInterval) async throws -> [Int]
         let fetchSnapshot: @Sendable ([Int], TimeInterval) async throws -> AntigravityStatusSnapshot
-        let processOwnerUserID: @Sendable (Int) -> UInt32?
-        let currentUserID: @Sendable () -> UInt32
+        let processOwnerUserID: @Sendable (Int) -> String?
+        let currentUserID: @Sendable () -> String
         /// The pid of an ``agy`` that CodexBar itself spawned and manages through
         /// ``AntigravityCLISession`` (if any). Such a process must NOT be reused
         /// through the warm path: doing so bypasses `beginProbe`/`finishProbe`, so
@@ -483,7 +483,7 @@ struct AntigravityCLIHTTPSFetchStrategy: ProviderFetchStrategy {
                     .fetchFromPorts(ports, deadline: deadline)
             },
             processOwnerUserID: { pid in
-                AntigravityProcessIdentityProvider().ownerUserID(for: pid_t(pid))
+                AntigravityProcessIdentityProvider().ownerUserID(for: Int32(pid))
             },
             currentUserID: {
                 AntigravityProcessIdentityProvider.currentUserID
@@ -811,7 +811,7 @@ struct AntigravityCLIHTTPSFetchStrategy: ProviderFetchStrategy {
     /// processes bind ports quickly, but ``GetUserStatus`` can return transient
     /// initialization failures for a few seconds after the port appears.
     static func waitForSnapshot(
-        pid: pid_t,
+        pid: Int32,
         deadline: Date,
         expectedAccountEmail: String? = nil,
         dependencies: SnapshotWaitDependencies) async throws -> AntigravityStatusSnapshot

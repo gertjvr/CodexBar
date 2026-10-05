@@ -1,3 +1,4 @@
+#if !os(Windows)
 #if canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)
@@ -1223,3 +1224,5 @@ extension SpawnedProcessGroup {
     }
     #endif
 }
+
+#endif

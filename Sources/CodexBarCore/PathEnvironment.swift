@@ -376,6 +376,28 @@ public enum BinaryLocator {
         home: String) -> String?
     {
         // swiftlint:enable function_parameter_count
+        #if os(Windows)
+        if let override = WindowsEnvironment.value(overrideKey, in: env),
+           let hit = WindowsEnvironment.findExecutable(
+               override, paths: [], environment: env, fileManager: fileManager, allowed: launchCandidateFilter)
+        {
+            return hit
+        }
+        let paths = (loginPATH ?? []) + WindowsEnvironment.pathEntries(WindowsEnvironment.value("PATH", in: env) ?? "")
+        if let hit = WindowsEnvironment.findExecutable(
+            name, paths: paths, environment: env, fileManager: fileManager, allowed: launchCandidateFilter)
+        {
+            return hit
+        }
+        for candidate in wellKnownPaths {
+            if let hit = WindowsEnvironment.findExecutable(
+                candidate, paths: [], environment: env, fileManager: fileManager, allowed: launchCandidateFilter)
+            {
+                return hit
+            }
+        }
+        return nil
+        #else
         // 1) Explicit override
         if let override = env[overrideKey], fileManager.isExecutableFile(atPath: override) {
             return override
@@ -434,6 +456,7 @@ public enum BinaryLocator {
             in: ["/usr/bin", "/bin", "/usr/sbin", "/sbin"],
             fileManager: fileManager,
             launchCandidateFilter: launchCandidateFilter)
+        #endif
     }
 
     static func find(
@@ -442,6 +465,14 @@ public enum BinaryLocator {
         fileManager: FileManager,
         launchCandidateFilter: (String, FileManager) -> Bool = { _, _ in true }) -> String?
     {
+        #if os(Windows)
+        return WindowsEnvironment.findExecutable(
+            binary,
+            paths: paths,
+            environment: ProcessInfo.processInfo.environment,
+            fileManager: fileManager,
+            allowed: launchCandidateFilter)
+        #else
         if binary.contains("/") {
             let path = URL(fileURLWithPath: binary).standardizedFileURL.path
             return fileManager.isExecutableFile(atPath: path) && launchCandidateFilter(path, fileManager)
@@ -455,6 +486,7 @@ public enum BinaryLocator {
             }
         }
         return nil
+        #endif
     }
 }
 
@@ -801,9 +833,12 @@ public enum ShellCommandLocator {
         self.runShellCommand(shell: shell, arguments: arguments, timeout: timeout)
     }
 
+    #if !os(Windows)
     static func test_makeCloseOnExecPipe() -> (read: Int32, write: Int32)? {
         self.makeCloseOnExecPipe()
     }
+
+    #endif
 
     static var test_shellSpawnFlags: Int16 {
         self.shellSpawnFlags
@@ -815,6 +850,14 @@ public enum ShellCommandLocator {
         _ timeout: TimeInterval,
         _ fileManager: FileManager) -> String?
     {
+        #if os(Windows)
+        let environment = ProcessInfo.processInfo.environment
+        return WindowsEnvironment.findExecutable(
+            tool,
+            paths: WindowsEnvironment.pathEntries(WindowsEnvironment.value("PATH", in: environment) ?? ""),
+            environment: environment,
+            fileManager: fileManager)
+        #else
         let text = self.runShellCapture(shell, timeout, "command -v \(tool)")?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard let text, !text.isEmpty else { return nil }
@@ -828,6 +871,7 @@ public enum ShellCommandLocator {
         }
 
         return nil
+        #endif
     }
 
     public static func resolveAlias(
@@ -837,6 +881,10 @@ public enum ShellCommandLocator {
         _ fileManager: FileManager,
         _ home: String) -> String?
     {
+        #if os(Windows)
+        // POSIX login-shell aliases are not Windows executable paths.
+        return nil
+        #else
         let command = "alias \(tool) 2>/dev/null; type -a \(tool) 2>/dev/null"
         guard let text = self.runShellCapture(shell, timeout, command) else { return nil }
         let lines = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -854,8 +902,10 @@ public enum ShellCommandLocator {
         }
 
         return nil
+        #endif
     }
 
+    #if !os(Windows)
     private static func makeCloseOnExecPipe() -> (read: Int32, write: Int32)? {
         var fds: (read: Int32, write: Int32) = (-1, -1)
         #if os(Linux)
@@ -880,6 +930,8 @@ public enum ShellCommandLocator {
         return fds
     }
 
+    #endif
+
     /// Runs a shell command, draining both stdout and stderr concurrently so that
     /// verbose shell init scripts (oh-my-zsh, nvm, pyenv, etc.) cannot deadlock on
     /// a full pipe buffer.  The child is launched via `posix_spawn` with
@@ -891,6 +943,30 @@ public enum ShellCommandLocator {
         arguments: [String],
         timeout: TimeInterval,
         environment: [String: String] = ProcessInfo.processInfo.environment) -> Data?
+    {
+        #if os(Windows)
+        guard let result = try? WindowsSubprocessRunner.runSynchronously(
+            binary: shell,
+            arguments: arguments,
+            environment: environment,
+            timeout: timeout)
+        else { return nil }
+        return Data(result.stdout.utf8)
+        #else
+        return self.runUnixShellCommand(
+            shell: shell,
+            arguments: arguments,
+            timeout: timeout,
+            environment: environment)
+        #endif
+    }
+
+    #if !os(Windows)
+    private static func runUnixShellCommand(
+        shell: String,
+        arguments: [String],
+        timeout: TimeInterval,
+        environment: [String: String]) -> Data?
     {
         // Darwin needs a lock around raw descriptor creation, close-on-exec flagging,
         // and spawn. Linux creates close-on-exec descriptors atomically with pipe2.
@@ -1042,6 +1118,7 @@ public enum ShellCommandLocator {
         guard stdoutCapture.reachedEOF, data.count <= maxOutputBytes else { return nil }
         return data
     }
+    #endif
 
     private static func runShellCapture(_ shell: String?, _ timeout: TimeInterval, _ command: String) -> String? {
         let shellPath = (shell?.isEmpty == false) ? shell! : "/bin/zsh"
@@ -1119,7 +1196,11 @@ public enum ShellCommandLocator {
 public enum PathBuilder {
     /// Relative and empty PATH entries depend on an untrusted invocation directory.
     static func searchDirectories(_ paths: [String]) -> [String] {
+        #if os(Windows)
+        paths.filter(WindowsEnvironment.isAbsolutePath)
+        #else
         paths.filter { $0.hasPrefix("/") }
+        #endif
     }
 
     public static func effectivePATH(
@@ -1128,6 +1209,9 @@ public enum PathBuilder {
         loginPATH: [String]? = LoginShellPathCache.shared.current,
         home _: String = NSHomeDirectory()) -> String
     {
+        #if os(Windows)
+        return WindowsEnvironment.effectivePATH(environment: env, additionalPaths: loginPATH ?? [])
+        #else
         var parts: [String] = []
 
         if let loginPATH, !loginPATH.isEmpty {
@@ -1145,6 +1229,7 @@ public enum PathBuilder {
 
         var seen = Set<String>()
         return parts.filter { seen.insert($0).inserted }.joined(separator: ":")
+        #endif
     }
 
     public static func debugSnapshot(
@@ -1161,7 +1246,11 @@ public enum PathBuilder {
         let codex = BinaryLocator.resolveCodexBinary(env: env, loginPATH: login, home: home)
         let claude = BinaryLocator.resolveClaudeBinary(env: env, loginPATH: login, home: home)
         let gemini = BinaryLocator.resolveGeminiBinary(env: env, loginPATH: login, home: home)
+        #if os(Windows)
+        let loginString = login?.joined(separator: ";")
+        #else
         let loginString = login?.joined(separator: ":")
+        #endif
         return PathDebugSnapshot(
             codexBinary: codex,
             claudeBinary: claude,
@@ -1188,6 +1277,10 @@ enum LoginShellPathCapturer {
         shell: String? = ProcessInfo.processInfo.environment["SHELL"],
         timeout: TimeInterval = Self.defaultTimeout) -> [String]?
     {
+        #if os(Windows)
+        return WindowsEnvironment.pathEntries(
+            WindowsEnvironment.value("PATH", in: ProcessInfo.processInfo.environment) ?? "")
+        #else
         let shellPath = (shell?.isEmpty == false) ? shell! : "/bin/zsh"
         let isCI = ["1", "true"].contains(ProcessInfo.processInfo.environment["CI"]?.lowercased())
         let marker = "__CODEXBAR_PATH__"
@@ -1216,6 +1309,7 @@ enum LoginShellPathCapturer {
         let value = extracted.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return nil }
         return value.split(separator: ":").map(String.init)
+        #endif
     }
 }
 

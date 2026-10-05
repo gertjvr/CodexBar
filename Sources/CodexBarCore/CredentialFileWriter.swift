@@ -7,7 +7,8 @@ import Musl
 #endif
 import Foundation
 
-/// Writes credential-bearing files (session tokens, cookies) with owner-only (`0600`) permissions
+/// Writes credential-bearing files (session tokens, cookies) with owner-only permissions
+/// (`0600` on Unix, a protected current-user DACL on Windows)
 /// established **before** any bytes are written, then atomically published — the same secure shape
 /// `CodexOAuthCredentials` already uses. Also repairs the mode of a pre-existing file so users who
 /// upgrade from a build that wrote `0644` are corrected on first access.
@@ -36,14 +37,32 @@ package enum CredentialFileWriter {
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
 
         let stagingDirectory = directory.appendingPathComponent(".codexbar-staged-\(UUID().uuidString)")
+        #if os(Windows)
+        try WindowsPrivateFile.createDirectory(at: stagingDirectory)
+        #else
         guard stagingDirectory.path.withCString({ mkdir($0, mode_t(0o700)) }) == 0 else {
             throw Self.posixError(errno, path: stagingDirectory.path)
         }
-        defer { try? fm.removeItem(at: stagingDirectory) }
         guard stagingDirectory.path.withCString({ chmod($0, mode_t(0o700)) }) == 0 else {
-            throw Self.posixError(errno, path: stagingDirectory.path)
+            let error = Self.posixError(errno, path: stagingDirectory.path)
+            try? fm.removeItem(at: stagingDirectory)
+            throw error
         }
+        #endif
+        defer { try? fm.removeItem(at: stagingDirectory) }
         let staged = stagingDirectory.appendingPathComponent(url.lastPathComponent)
+        #if os(Windows)
+        try WindowsPrivateFile.write(data, to: staged) { staged in
+            #if DEBUG
+            try self.beforeWriteForTesting?(staged)
+            #endif
+        }
+        try beforePublish?(staged)
+        #if DEBUG
+        try self.beforePublishForTesting?(staged)
+        #endif
+        try WindowsPrivateFile.publish(staged, to: url)
+        #else
         let descriptor = staged.path.withCString {
             open($0, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode_t(0o600))
         }
@@ -76,19 +95,25 @@ package enum CredentialFileWriter {
             if handleOpen { try? handle.close() }
             throw error
         }
+        #endif
     }
 
     /// If `url` exists and is readable by group or others, restrict it to `0600`. Best-effort;
     /// used to remediate credential files created `0644` by earlier builds when they are next read.
     static func repairPermissions(at url: URL) {
+        #if os(Windows)
+        try? WindowsPrivateFile.repairPermissions(at: url)
+        #else
         let fm = FileManager.default
         guard let attributes = try? fm.attributesOfItem(atPath: url.path),
               let mode = (attributes[.posixPermissions] as? NSNumber)?.uint16Value,
               (mode & 0o077) != 0
         else { return }
         try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        #endif
     }
 
+    #if !os(Windows)
     private static func posixError(_ code: Int32, path: String) -> Error {
         NSError(
             domain: NSPOSIXErrorDomain,
@@ -98,4 +123,5 @@ package enum CredentialFileWriter {
                 NSLocalizedDescriptionKey: String(cString: strerror(code)),
             ])
     }
+    #endif
 }
