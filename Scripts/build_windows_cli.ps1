@@ -1,4 +1,4 @@
-param([switch]$TestPlugins)
+param([switch]$WithTray, [switch]$TestPlugins)
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
@@ -37,42 +37,71 @@ Invoke-LoggedCommand "sqlite-compile" "cl.exe" @(
 )
 Invoke-LoggedCommand "sqlite-link" "lib.exe" @("/nologo", "/OUT:$sqliteLibrary", $sqliteObject)
 
-$env:CODEXBAR_SQLITE3_LIB_DIR = $sqliteDirectory
-Invoke-LoggedCommand "resolve" "swift" @("package", "resolve")
-$buildArguments = @(
-    "build", "-c", "release", "--product", "CodexBarCLI",
-    # Swift 6.3.3's Windows LLVM asserts while optimizing dbg.assign fragment metadata.
-    # Keep release optimization enabled; omit debug information from the packaged executable.
-    "-Xswiftc", "-gnone",
-    "-Xcc", "-I$sqliteSource", "-Xlinker", "/LIBPATH:$sqliteDirectory"
-)
-Invoke-LoggedCommand "build" "swift" $buildArguments
-$binDirectory = & swift @buildArguments --show-bin-path
-if ($LASTEXITCODE -ne 0) { throw "Could not resolve the CLI output directory." }
-$binDirectory = ($binDirectory | Select-Object -Last 1).Trim()
-if (-not (Test-Path (Join-Path $binDirectory "CodexBarCLI.exe"))) {
-    throw "The build did not produce CodexBarCLI.exe."
-}
-if ($TestPlugins) {
-    $testEnvironment = @{}
-    try {
-        foreach ($key in @("CODEXBAR_SUPPRESS_TEST_KEYCHAIN_ACCESS", "CODEXBAR_TEST_CODEX_FILE_ISOLATION", "CODEXBAR_TEST_SESSION_FILE_ISOLATION")) {
-            $testEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, "Process")
-            [Environment]::SetEnvironmentVariable($key, "1", "Process")
+$originalSQLiteLibrary = [Environment]::GetEnvironmentVariable("CODEXBAR_SQLITE3_LIB_DIR", "Process")
+try {
+    $env:CODEXBAR_SQLITE3_LIB_DIR = $sqliteDirectory
+    Invoke-LoggedCommand "resolve" "swift" @("package", "resolve")
+    $buildArguments = @(
+        "build", "-c", "release", "--product", "CodexBarCLI",
+        # Swift 6.3.3's Windows LLVM asserts while optimizing dbg.assign fragment metadata.
+        # Keep release optimization enabled; omit debug information from the packaged executable.
+        "-Xswiftc", "-gnone",
+        "-Xcc", "-I$sqliteSource", "-Xlinker", "/LIBPATH:$sqliteDirectory"
+    )
+    if ($WithTray) {
+        $iconDirectory = Join-Path $env:RUNNER_TEMP "codexbar-windows-icon"
+        & (Join-Path $PSScriptRoot "build_windows_icon.ps1") -OutputDirectory $iconDirectory
+        # Keep shared compiler arguments identical for both products so SwiftPM reuses the core build.
+        $buildArguments += @("-Xlinker", (Join-Path $iconDirectory "codexbar.res"))
+    }
+    Invoke-LoggedCommand "build" "swift" $buildArguments
+    $binDirectory = & swift @buildArguments --show-bin-path
+    if ($LASTEXITCODE -ne 0) { throw "Could not resolve the CLI output directory." }
+    $binDirectory = ($binDirectory | Select-Object -Last 1).Trim()
+    if (-not (Test-Path (Join-Path $binDirectory "CodexBarCLI.exe"))) {
+        throw "The build did not produce CodexBarCLI.exe."
+    }
+    if ($WithTray) {
+        $trayArguments = $buildArguments.Clone()
+        $productIndex = [Array]::IndexOf($trayArguments, "--product")
+        if ($productIndex -lt 0 -or $productIndex + 1 -ge $trayArguments.Count) {
+            throw "The build arguments do not contain a product selection."
         }
-        Invoke-LoggedCommand "plugin-tests" "swift" @(
-            "test", "--filter", "CodexBarPluginTests",
-            "-Xcc", "-I$sqliteSource", "-Xlinker", "/LIBPATH:$sqliteDirectory"
-        )
-        $testLog = Get-Content (Join-Path $logDirectory "plugin-tests.log") -Raw
-        if ($testLog -notmatch 'Suite UserProviderPluginPortableTests passed' -or
-            $testLog -notmatch 'Test run with [1-9][0-9]* tests? .*passed') {
-            throw "Native plugin validation did not report a nonempty successful run and portable runtime suite."
-        }
-    } finally {
-        foreach ($key in $testEnvironment.Keys) {
-            [Environment]::SetEnvironmentVariable($key, $testEnvironment[$key], "Process")
+        $trayArguments[$productIndex + 1] = "CodexBarWindowsTray"
+        Invoke-LoggedCommand "build-tray" "swift" $trayArguments
+        $tray = Join-Path $binDirectory "CodexBarWindowsTray.exe"
+        if (-not (Test-Path $tray)) { throw "The build did not produce CodexBarWindowsTray.exe." }
+    }
+    if ($TestPlugins) {
+        $testEnvironment = @{}
+        try {
+            foreach ($key in @("CODEXBAR_SUPPRESS_TEST_KEYCHAIN_ACCESS", "CODEXBAR_TEST_CODEX_FILE_ISOLATION", "CODEXBAR_TEST_SESSION_FILE_ISOLATION")) {
+                $testEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, "Process")
+                [Environment]::SetEnvironmentVariable($key, "1", "Process")
+            }
+            Invoke-LoggedCommand "plugin-tests" "swift" @(
+                "test", "--filter", "CodexBarPluginTests",
+                "-Xcc", "-I$sqliteSource", "-Xlinker", "/LIBPATH:$sqliteDirectory"
+            )
+            $testLog = Get-Content (Join-Path $logDirectory "plugin-tests.log") -Raw
+            foreach ($suite in @(
+                "UserProviderPluginPortableTests", "WindowsCostUsageCacheMigrationTests",
+                "ClaudeCostCachePortabilityTests", "MuseLocalUsagePortabilityTests", "UsageFileMetadataTests"
+            )) {
+                if ($testLog -notmatch ("Suite " + [regex]::Escape($suite) + " passed")) {
+                    throw "Native validation did not report a successful $suite run."
+                }
+            }
+            if ($testLog -notmatch 'Test run with [1-9][0-9]* tests? .*passed') {
+                throw "Native validation did not report a nonempty successful test run."
+            }
+        } finally {
+            foreach ($key in $testEnvironment.Keys) {
+                [Environment]::SetEnvironmentVariable($key, $testEnvironment[$key], "Process")
+            }
         }
     }
+    "bin_dir=$binDirectory" >> $env:GITHUB_OUTPUT
+} finally {
+    [Environment]::SetEnvironmentVariable("CODEXBAR_SQLITE3_LIB_DIR", $originalSQLiteLibrary, "Process")
 }
-"bin_dir=$binDirectory" >> $env:GITHUB_OUTPUT

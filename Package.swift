@@ -41,6 +41,10 @@ let package = Package(
         ])
         #endif
 
+        #if os(Windows)
+        products.append(.executable(name: "CodexBarWindowsTray", targets: ["CodexBarWindowsTray"]))
+        #endif
+
         return products
     }(),
     dependencies: [
@@ -183,6 +187,21 @@ let package = Package(
             ]))
         #endif
 
+        #if os(Windows)
+        targets.append(.executableTarget(
+            name: "CodexBarWindowsTray",
+            dependencies: ["CodexBarCore"],
+            path: "Sources/CodexBarWindowsTray",
+            linkerSettings: [
+                .linkedLibrary("User32"),
+                .linkedLibrary("Gdi32"),
+                .linkedLibrary("Shell32"),
+                .linkedLibrary("Comctl32"),
+                .linkedLibrary("UxTheme"),
+                .unsafeFlags(["-Xlinker", "/SUBSYSTEM:WINDOWS", "-Xlinker", "/ENTRY:mainCRTStartup"]),
+            ]))
+        #endif
+
         #if os(macOS)
         targets.append(contentsOf: [
             .executableTarget(
@@ -237,6 +256,7 @@ let package = Package(
                 "AdaptiveReplayCLITests",
                 "AdaptiveReplayKitTests",
                 "WindowsPortabilitySmoke",
+                "WindowsTraySmoke",
                 "CodexBarTests/ProviderPluginDetailsParityTests.swift",
                 "CodexBarTests/ProviderPluginExtensionParityTests.swift",
                 "CodexBarTests/ProviderPluginParityTests.swift",

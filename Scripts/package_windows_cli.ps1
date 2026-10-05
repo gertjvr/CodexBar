@@ -1,14 +1,19 @@
 param(
     [Parameter(Mandatory)][string]$BinDirectory,
-    [Parameter(Mandatory)][ValidatePattern('^[0-9A-Za-z._-]+$')][string]$Version
+    [Parameter(Mandatory)][ValidatePattern('^[0-9A-Za-z._-]+$')][string]$Version,
+    [switch]$IncludeTray
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $stage = Join-Path $env:RUNNER_TEMP "codexbar-windows-package café 测试"
+if ($IncludeTray) { $stage += " tray" }
 New-Item -ItemType Directory $stage | Out-Null
 Copy-Item (Join-Path $BinDirectory "CodexBarCLI.exe") (Join-Path $stage "codexbar.exe")
+if ($IncludeTray) {
+    Copy-Item (Join-Path $BinDirectory "CodexBarWindowsTray.exe") (Join-Path $stage "CodexBarTray.exe")
+}
 Set-Content (Join-Path $stage "VERSION") $Version -Encoding utf8NoBOM
 Copy-Item (Join-Path $repoRoot "LICENSE") $stage
 
@@ -28,6 +33,7 @@ if ($env:VCToolsRedistDir) {
 }
 $pending = [Collections.Generic.Queue[string]]::new()
 $pending.Enqueue((Join-Path $stage "codexbar.exe"))
+if ($IncludeTray) { $pending.Enqueue((Join-Path $stage "CodexBarTray.exe")) }
 $visited = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 while ($pending.Count -gt 0) {
     $binary = $pending.Dequeue()
@@ -95,18 +101,22 @@ function Invoke-PackagedSmoke {
     if ($Resources) { $info.Environment["CODEXBAR_RESOURCE_SMOKE"] = "1" }
     foreach ($argument in $CommandArguments) { $info.ArgumentList.Add($argument) }
     $process = [Diagnostics.Process]::Start($info)
-    $stdout = $process.StandardOutput.ReadToEndAsync()
-    $stderr = $process.StandardError.ReadToEndAsync()
-    if (-not $process.WaitForExit(20000)) {
-        $process.Kill($true)
-        throw "Packaged CLI smoke test timed out."
+    try {
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(20000)) {
+            $process.Kill($true)
+            $process.WaitForExit()
+            throw "Packaged CLI smoke test timed out."
+        }
+        $output = $stdout.GetAwaiter().GetResult()
+        $errors = $stderr.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne $ExpectedExitCode -or -not $output.Contains($Expected)) {
+            throw "Packaged CLI smoke test failed: $output $errors"
+        }
+    } finally {
+        $process.Dispose()
     }
-    $output = $stdout.GetAwaiter().GetResult()
-    $errors = $stderr.GetAwaiter().GetResult()
-    if ($process.ExitCode -ne $ExpectedExitCode -or -not $output.Contains($Expected)) {
-        throw "Packaged CLI smoke test failed: $output $errors"
-    }
-    $process.Dispose()
     if ($ValidateOutput) { & $ValidateOutput $output $errors }
 }
 
@@ -217,12 +227,32 @@ try {
         throw "Packaged Codex did not follow the expected app-server request sequence."
     }
     Write-Host "Packaged Codex CLI provider passed synthetic RPC, identity, limits, and credits checks."
+    if ($IncludeTray) {
+        $originalPath = $env:PATH
+        try {
+            $env:PATH = "$env:SystemRoot/System32;$env:SystemRoot"
+            ./Scripts/test_windows_tray.ps1 -Executable (Join-Path $stage "CodexBarTray.exe") -Packaged `
+                -CLIConfig $disabledConfig -OutputDirectory ".build/windows-tray-packaged-cli-preview"
+        } finally {
+            $env:PATH = $originalPath
+        }
+    }
 } finally {
     Move-Item $hiddenResources $resources
     Remove-Item $fixtureRoot -Recurse -Force
 }
 
-$assetName = "CodexBarCLI"
+if ($IncludeTray) {
+    $originalPath = $env:PATH
+    try {
+        $env:PATH = "$env:SystemRoot/System32;$env:SystemRoot"
+        ./Scripts/test_windows_tray.ps1 -Executable (Join-Path $stage "CodexBarTray.exe") -Packaged `
+            -OutputDirectory ".build/windows-tray-packaged-preview"
+    } finally {
+        $env:PATH = $originalPath
+    }
+}
+$assetName = if ($IncludeTray) { "CodexBar" } else { "CodexBarCLI" }
 $asset = Join-Path $env:RUNNER_TEMP "$assetName-$Version-windows-x86_64.zip"
 Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $asset
 $hash = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLowerInvariant()

@@ -1,0 +1,1134 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-13T03:00:00Z",
+  "host": {
+    "codexBarVersion": "visual-fixture"
+  },
+  "providers": [
+    {
+      "id": "codex",
+      "name": "Codex",
+      "enabled": true,
+      "identity": {
+        "accountEmail": "developer@example.test",
+        "plan": "Pro"
+      },
+      "windows": [
+        {
+          "kind": "secondary",
+          "label": "Weekly",
+          "remainingPercent": 28,
+          "usedPercent": 72,
+          "resetAt": "2026-09-19T07:00:00Z"
+        },
+        {
+          "kind": "spark-primary",
+          "label": "Codex Spark 5-hour",
+          "remainingPercent": 100,
+          "usedPercent": 0,
+          "resetAt": "2026-09-13T08:00:00Z"
+        },
+        {
+          "kind": "spark-secondary",
+          "label": "Codex Spark Weekly",
+          "remainingPercent": 100,
+          "usedPercent": 0,
+          "resetAt": "2026-09-20T03:00:00Z"
+        }
+      ],
+      "credits": {
+        "remaining": 0,
+        "unit": "credits"
+      },
+      "cost": {
+        "todayUSD": 6.27,
+        "last30DaysUSD": 234.56,
+        "history": {
+          "sessionTokens": 18000000,
+          "last30DaysTokens": 350000000,
+          "daily": [
+            {
+              "date": "2026-08-15",
+              "totalCost": 8,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 801200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 8,
+                  "totalTokens": 800000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-08-16",
+              "totalCost": 4,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 401200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 4,
+                  "totalTokens": 400000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-08-17",
+              "totalCost": 1,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 101200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 1,
+                  "totalTokens": 100000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-08-18",
+              "totalCost": 1,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 101200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 1,
+                  "totalTokens": 100000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-08-19",
+              "totalCost": 4,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 401200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 4,
+                  "totalTokens": 400000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-08-20",
+              "totalCost": 9,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 901200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 9,
+                  "totalTokens": 900000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-08-21",
+              "totalCost": 8,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 801200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 8,
+                  "totalTokens": 800000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-08-22",
+              "totalCost": 7,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 701200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 7,
+                  "totalTokens": 700000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-08-23",
+              "totalCost": 5,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 501200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 5,
+                  "totalTokens": 500000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-08-24",
+              "totalCost": 1,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 101200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 1,
+                  "totalTokens": 100000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-08-25",
+              "totalCost": 1,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 101200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 1,
+                  "totalTokens": 100000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-08-26",
+              "totalCost": 8,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 801200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 8,
+                  "totalTokens": 800000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-08-27",
+              "totalCost": 5,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 501200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 5,
+                  "totalTokens": 500000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-08-28",
+              "totalCost": 10,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 1001200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 10,
+                  "totalTokens": 1000000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-08-29",
+              "totalCost": 11,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 1101200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 11,
+                  "totalTokens": 1100000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-08-30",
+              "totalCost": 9,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 901200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 9,
+                  "totalTokens": 900000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-08-31",
+              "totalCost": 24,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 2401200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 24,
+                  "totalTokens": 2400000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-09-01",
+              "totalCost": 10,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 1001200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 10,
+                  "totalTokens": 1000000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-09-02",
+              "totalCost": 13,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 1301200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 13,
+                  "totalTokens": 1300000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-09-03",
+              "totalCost": 2,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 201200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 2,
+                  "totalTokens": 200000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-09-04",
+              "totalCost": 1,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 101200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 1,
+                  "totalTokens": 100000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-09-05",
+              "totalCost": 1,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 101200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 1,
+                  "totalTokens": 100000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-09-06",
+              "totalCost": 1,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 101200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 1,
+                  "totalTokens": 100000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-09-07",
+              "totalCost": 1,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 101200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 1,
+                  "totalTokens": 100000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-09-08",
+              "totalCost": 4,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 401200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 4,
+                  "totalTokens": 400000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-09-09",
+              "totalCost": 3,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 301200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 3,
+                  "totalTokens": 300000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-09-10",
+              "totalCost": 1,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 101200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 1,
+                  "totalTokens": 100000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-09-11",
+              "totalCost": 4,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 401200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 4,
+                  "totalTokens": 400000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-09-12",
+              "totalCost": 2,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 201200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 2,
+                  "totalTokens": 200000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            },
+            {
+              "date": "2026-09-13",
+              "totalCost": 1,
+              "modelsUsed": [
+                "example-model"
+              ],
+              "totalTokens": 101200,
+              "modelBreakdowns": [
+                {
+                  "modelName": "example-model",
+                  "cost": 1,
+                  "totalTokens": 100000
+                },
+                {
+                  "modelName": "example-unpriced-model",
+                  "totalTokens": 1200
+                }
+              ]
+            }
+          ]
+        },
+        "historyDays": 30,
+        "currencyCode": "USD",
+        "projects": [
+          {
+            "name": "Example project",
+            "path": "C:/Projects/Example",
+            "totalCost": 123.45,
+            "totalTokens": 1200000,
+            "sources": [
+              {
+                "name": "Example worktree 1",
+                "path": "C:/Projects/Example/worktree-1",
+                "totalCost": 20.0,
+                "totalTokens": 200000
+              },
+              {
+                "name": "Example worktree 2",
+                "path": "C:/Projects/Example/worktree-2",
+                "totalCost": 21.0,
+                "totalTokens": 201000
+              },
+              {
+                "name": "Example worktree 3",
+                "path": "C:/Projects/Example/worktree-3",
+                "totalCost": 22.0,
+                "totalTokens": 202000
+              },
+              {
+                "name": "Example worktree 4",
+                "path": "C:/Projects/Example/worktree-4",
+                "totalCost": 23.0,
+                "totalTokens": 203000
+              },
+              {
+                "name": "Example worktree 5",
+                "path": "C:/Projects/Example/worktree-5",
+                "totalCost": 24.0,
+                "totalTokens": 204000
+              }
+            ]
+          }
+        ]
+      },
+      "presentation": {
+        "codeReviewRemainingPercent": 29,
+        "pace": {
+          "secondary": {
+            "expectedUsedPercent": 11,
+            "summary": "61% in deficit \u00b7 Runs out in 7h 25m"
+          }
+        },
+        "resetCreditExpiries": [
+          "2026-09-20T03:00:00Z",
+          "2026-10-04T03:00:00Z",
+          "2026-10-05T03:00:00Z"
+        ],
+        "usageBreakdown": [
+          {
+            "day": "2026-08-15",
+            "totalCreditsUsed": 24,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 16
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 8
+              }
+            ]
+          },
+          {
+            "day": "2026-08-16",
+            "totalCreditsUsed": 12,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 8
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 4
+              }
+            ]
+          },
+          {
+            "day": "2026-08-17",
+            "totalCreditsUsed": 3,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 2
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 1
+              }
+            ]
+          },
+          {
+            "day": "2026-08-18",
+            "totalCreditsUsed": 3,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 2
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 1
+              }
+            ]
+          },
+          {
+            "day": "2026-08-19",
+            "totalCreditsUsed": 12,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 8
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 4
+              }
+            ]
+          },
+          {
+            "day": "2026-08-20",
+            "totalCreditsUsed": 27,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 18
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 9
+              }
+            ]
+          },
+          {
+            "day": "2026-08-21",
+            "totalCreditsUsed": 24,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 16
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 8
+              }
+            ]
+          },
+          {
+            "day": "2026-08-22",
+            "totalCreditsUsed": 21,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 14
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 7
+              }
+            ]
+          },
+          {
+            "day": "2026-08-23",
+            "totalCreditsUsed": 15,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 10
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 5
+              }
+            ]
+          },
+          {
+            "day": "2026-08-24",
+            "totalCreditsUsed": 3,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 2
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 1
+              }
+            ]
+          },
+          {
+            "day": "2026-08-25",
+            "totalCreditsUsed": 3,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 2
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 1
+              }
+            ]
+          },
+          {
+            "day": "2026-08-26",
+            "totalCreditsUsed": 24,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 16
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 8
+              }
+            ]
+          },
+          {
+            "day": "2026-08-27",
+            "totalCreditsUsed": 15,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 10
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 5
+              }
+            ]
+          },
+          {
+            "day": "2026-08-28",
+            "totalCreditsUsed": 30,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 20
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 10
+              }
+            ]
+          },
+          {
+            "day": "2026-08-29",
+            "totalCreditsUsed": 33,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 22
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 11
+              }
+            ]
+          },
+          {
+            "day": "2026-08-30",
+            "totalCreditsUsed": 27,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 18
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 9
+              }
+            ]
+          },
+          {
+            "day": "2026-08-31",
+            "totalCreditsUsed": 72,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 48
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 24
+              }
+            ]
+          },
+          {
+            "day": "2026-09-01",
+            "totalCreditsUsed": 30,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 20
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 10
+              }
+            ]
+          },
+          {
+            "day": "2026-09-02",
+            "totalCreditsUsed": 39,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 26
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 13
+              }
+            ]
+          },
+          {
+            "day": "2026-09-03",
+            "totalCreditsUsed": 6,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 4
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 2
+              }
+            ]
+          },
+          {
+            "day": "2026-09-04",
+            "totalCreditsUsed": 3,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 2
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 1
+              }
+            ]
+          },
+          {
+            "day": "2026-09-05",
+            "totalCreditsUsed": 3,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 2
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 1
+              }
+            ]
+          },
+          {
+            "day": "2026-09-06",
+            "totalCreditsUsed": 3,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 2
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 1
+              }
+            ]
+          },
+          {
+            "day": "2026-09-07",
+            "totalCreditsUsed": 3,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 2
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 1
+              }
+            ]
+          },
+          {
+            "day": "2026-09-08",
+            "totalCreditsUsed": 12,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 8
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 4
+              }
+            ]
+          },
+          {
+            "day": "2026-09-09",
+            "totalCreditsUsed": 9,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 6
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 3
+              }
+            ]
+          },
+          {
+            "day": "2026-09-10",
+            "totalCreditsUsed": 3,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 2
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 1
+              }
+            ]
+          },
+          {
+            "day": "2026-09-11",
+            "totalCreditsUsed": 12,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 8
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 4
+              }
+            ]
+          },
+          {
+            "day": "2026-09-12",
+            "totalCreditsUsed": 6,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 4
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 2
+              }
+            ]
+          },
+          {
+            "day": "2026-09-13",
+            "totalCreditsUsed": 3,
+            "services": [
+              {
+                "service": "CLI",
+                "creditsUsed": 2
+              },
+              {
+                "service": "Desktop App",
+                "creditsUsed": 1
+              }
+            ]
+          }
+        ],
+        "subscriptionRenewsAt": "2026-09-23T03:00:00Z"
+      },
+      "status": {
+        "label": "All systems operational"
+      }
+    },
+    {
+      "id": "claude",
+      "name": "Claude",
+      "enabled": true,
+      "identity": {
+        "plan": "Max"
+      },
+      "windows": [
+        {
+          "kind": "primary",
+          "label": "Session",
+          "remainingPercent": 85,
+          "usedPercent": 15,
+          "resetAt": "2026-09-13T06:00:00Z"
+        },
+        {
+          "kind": "secondary",
+          "label": "Weekly",
+          "remainingPercent": 64,
+          "usedPercent": 36,
+          "resetAt": "2026-09-18T03:00:00Z"
+        }
+      ],
+      "status": {
+        "label": "All systems operational"
+      }
+    }
+  ]
+}
